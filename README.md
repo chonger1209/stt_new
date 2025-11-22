@@ -13,6 +13,11 @@
 - **时间流可视化**：底部时间流以像素块形式展示最近的使用记录，每个像素块代表一定时间间隔
 - **统计功能**：提供详细的使用统计，包括各应用程序使用时长和百分比
 - **自定义配置**：支持通过配置文件自定义颜色、时间间隔等设置
+- **智能大小写切换**：自动检测特定软件（如CAD、CAXA等）并自动切换大小写状态
+- **动态刷新频率**：根据最高程序使用时间自动调整直方图刷新频率
+- **窗口高度自动恢复**：当统计窗口高度增加时，30秒后自动恢复原始高度
+- **内存优化**：实现智能内存清理机制，减少内存占用
+- **日志优化**：减少不必要的日志输出，提高程序运行效率
 
 ### 系统要求
 
@@ -23,9 +28,8 @@
 ### 安装与使用
 
 1. 解压下载的压缩包
-2. 双击`启动屏幕时间追踪器_新版.bat`文件运行应用程序
-3. 或者直接双击`stt_new_1122.exe`文件运行
-4. 应用程序将在系统托盘区域运行，开始记录屏幕使用时间
+2. 双击`stt_new.exe`文件运行应用程序
+3. 应用程序将在系统托盘区域运行，开始记录屏幕使用时间
 
 ### 配置说明
 
@@ -35,6 +39,10 @@
 - `color_caps_off`：大小写关闭时的背景色（默认为#4CAF50）
 - `time_stream_pixel_seconds`：时间流每个像素代表的秒数（默认为60）
 - `check_interval`：检查活动窗口的间隔时间（毫秒）
+- `software_list`：需要自动切换到大写输入的软件列表（默认为['CAXA', 'CAD', 'SOLIDWORKS']）
+- `screen_time_refresh_frequency`：屏幕时间刷新频率（默认为10）
+- `grid_second_per_block`：网格每块代表的秒数（默认为60）
+- `window_height`：窗口高度设置（默认为180）
 
 ### 数据存储
 
@@ -59,6 +67,11 @@
 - 打包后的应用程序不再显示命令行窗口
 - 使用了新的图标文件
 - 优化了内存使用和性能
+- 添加了智能大小写切换功能，自动检测特定软件并切换大小写状态
+- 实现了动态刷新频率，根据最高程序使用时间自动调整直方图刷新频率
+- 添加了窗口高度自动恢复功能，30秒后自动恢复原始高度
+- 实现了智能内存清理机制，减少内存占用
+- 优化了日志输出，减少了不必要的日志记录
 
 
 ## English Version
@@ -74,6 +87,11 @@ Screen Time Tracker is a lightweight desktop application designed for Windows sy
 - **Time Stream Visualization**: The bottom time stream displays recent usage records in pixel blocks, with each block representing a specific time interval
 - **Statistics Function**: Provides detailed usage statistics, including duration and percentage for each application
 - **Customizable Configuration**: Supports customization of colors, time intervals, and other settings through configuration files
+- **Smart Caps Lock Switching**: Automatically detects specific software (such as CAD, CAXA, etc.) and switches Caps Lock status automatically
+- **Dynamic Refresh Rate**: Automatically adjusts histogram refresh rate based on the highest program usage time
+- **Automatic Window Height Recovery**: Automatically restores original window height after 30 seconds when the statistics window height increases
+- **Memory Optimization**: Implements intelligent memory cleaning mechanism to reduce memory usage
+- **Log Optimization**: Reduces unnecessary log output to improve program efficiency
 
 ### System Requirements
 
@@ -84,9 +102,8 @@ Screen Time Tracker is a lightweight desktop application designed for Windows sy
 ### Installation and Usage
 
 1. Extract the downloaded zip file
-2. Double-click the `启动屏幕时间追踪器_新版.bat` file to run the application
-3. Or directly double-click the `stt_new_1122.exe` file to run
-4. The application will run in the system tray area and start recording screen time
+2. Double-click the `stt_new.exe` file to run the application
+3. The application will run in the system tray area and start recording screen time
 
 ### Configuration
 
@@ -96,6 +113,10 @@ The application's configuration file is `config.txt`, where you can customize th
 - `color_caps_off`: Background color when Caps Lock is off (default: #4CAF50)
 - `time_stream_pixel_seconds`: Seconds represented by each pixel in the time stream (default: 60)
 - `check_interval`: Interval time for checking active windows (milliseconds)
+- `software_list`: List of software that requires automatic switching to uppercase input (default: ['CAXA', 'CAD', 'SOLIDWORKS'])
+- `screen_time_refresh_frequency`: Screen time refresh frequency (default: 10)
+- `grid_second_per_block`: Seconds represented by each block in the grid (default: 60)
+- `window_height`: Window height setting (default: 180)
 
 ### Data Storage
 
@@ -120,3 +141,8 @@ If the program cannot run normally, please try the following solutions:
 - The packaged application no longer displays the command line window
 - Used new icon file
 - Optimized memory usage and performance
+- Added smart Caps Lock switching feature that automatically detects specific software and switches Caps Lock status
+- Implemented dynamic refresh rate that automatically adjusts histogram refresh rate based on the highest program usage time
+- Added automatic window height recovery feature that restores original window height after 30 seconds
+- Implemented intelligent memory cleaning mechanism to reduce memory usage
+- Optimized log output to reduce unnecessary log records
