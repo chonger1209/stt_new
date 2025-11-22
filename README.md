@@ -60,13 +60,6 @@
 - 使用了新的图标文件
 - 优化了内存使用和性能
 
-### 技术支持
-
-如遇到问题或有功能建议，请通过以下方式联系：
-- 邮箱：support@screentimetracker.com
-- 问题反馈：https://github.com/screentimetracker/issues
-
----
 
 ## English Version
 
@@ -127,9 +120,3 @@ If the program cannot run normally, please try the following solutions:
 - The packaged application no longer displays the command line window
 - Used new icon file
 - Optimized memory usage and performance
-
-### Technical Support
-
-If you encounter problems or have feature suggestions, please contact us through:
-- Email: support@screentimetracker.com
-- Issue Feedback: https://github.com/screentimetracker/issues
