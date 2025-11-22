@@ -492,10 +492,11 @@ class CapsLockChecker:
         if not self.time_stream_cache:
             return
         
-        # 记录缓存刷新开始日志
+        # 减少缓存刷新日志，只在有大量数据时记录
         total_apps = len(self.time_stream_cache)
         total_records = sum(len(records) for records in self.time_stream_cache.values())
-        self.logger.info(f"开始缓存刷新 - 应用数: {total_apps}, 记录数: {total_records}")
+        if total_records > 50:  # 只在记录数较多时记录日志
+            self.logger.info(f"缓存刷新 - 应用数: {total_apps}, 记录数: {total_records}")
         
         # 批量准备数据
         records_to_insert = []
@@ -526,7 +527,9 @@ class CapsLockChecker:
                 )
                 conn.commit()
             
-            self.logger.info(f"缓存刷新完成 - 写入 {len(records_to_insert)} 条记录")
+            # 减少日志输出，只在有大量数据时记录
+            if len(records_to_insert) > 50:
+                self.logger.info(f"缓存刷新完成 - 写入 {len(records_to_insert)} 条记录")
         
         # 清空缓存
         self.time_stream_cache.clear()
@@ -877,13 +880,15 @@ class CapsLockChecker:
                     if (software.lower() in app_name.lower() or 
                         software.lower() in window_title.lower()):
                         is_caps_required_software = True
+                        # 减少日志输出，只在DEBUG模式下记录
                         self.logger.debug(f"检测到需要大写的软件: {software} (程序: {app_name}, 标题: {window_title})")
                         break
                 
                 # 根据软件类型自动切换大小写
                 if is_caps_required_software and not current_status:
                     # 需要大写但当前是小写，切换为大写
-                    self.logger.info(f"切换到大写 - 检测到软件: {app_name}")
+                    # 减少日志输出，改为DEBUG级别
+                    self.logger.debug(f"切换到大写 - 检测到软件: {app_name}")
                     win32api.keybd_event(win32con.VK_CAPITAL, 0, 0, 0)
                     win32api.keybd_event(win32con.VK_CAPITAL, 0, win32con.KEYEVENTF_KEYUP, 0)
                     time.sleep(0.05)  # 等待系统响应
@@ -894,7 +899,8 @@ class CapsLockChecker:
                     self.update_status()
                 elif not is_caps_required_software and current_status:
                     # 不需要大写但当前是大写，切换为小写
-                    self.logger.info(f"切换到小写 - 当前软件: {app_name}")
+                    # 减少日志输出，改为DEBUG级别
+                    self.logger.debug(f"切换到小写 - 当前软件: {app_name}")
                     win32api.keybd_event(win32con.VK_CAPITAL, 0, 0, 0)
                     win32api.keybd_event(win32con.VK_CAPITAL, 0, win32con.KEYEVENTF_KEYUP, 0)
                     time.sleep(0.05)  # 等待系统响应
@@ -1483,10 +1489,10 @@ class CapsLockChecker:
         today = datetime.date.today()
         log_filename = os.path.join(log_folder, 'log_{}.txt'.format(today.strftime('%Y-%m-%d')))
         
-        # 配置日志
+        # 配置日志 - 将日志级别从DEBUG改为INFO，减少日志输出
         logging.basicConfig(
             filename=log_filename,
-            level=logging.DEBUG,
+            level=logging.INFO,  # 改为INFO级别，减少DEBUG级别的日志
             format='%(asctime)s - %(levelname)s - %(message)s',
             encoding='utf-8'
         )
