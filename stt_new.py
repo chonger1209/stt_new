@@ -656,6 +656,9 @@ class CapsLockChecker:
         # 清除历史点击绑定
         if hasattr(self, 'history_click_bindings'):
             self.history_click_bindings.clear()
+        # 清空已绘制像素格记录
+        if hasattr(self, 'drawn_pixels'):
+            self.drawn_pixels.clear()
         
         if not valid_history:
             return
@@ -688,6 +691,13 @@ class CapsLockChecker:
             self.history_bar_h = new_height
             self.history_canvas.configure(height=self.history_bar_h)
         
+        # 初始化已绘制像素格记录（用于优化日志）
+        if not hasattr(self, 'drawn_pixels'):
+            self.drawn_pixels = set()
+        
+        # 记录新增像素格数量
+        new_pixels_count = 0
+        
         # 批量绘制方块
         for i, (app, dur) in enumerate(valid_history):
             count = block_counts[i]
@@ -698,6 +708,9 @@ class CapsLockChecker:
                 x = current_col * block_size
                 y = current_row * block_size
                 
+                # 创建像素格的唯一标识
+                pixel_key = (app, x, y)
+                
                 rect_id = self.history_canvas.create_rectangle(
                     x, y, 
                     x + block_size - 1, y + block_size - 1,
@@ -706,8 +719,12 @@ class CapsLockChecker:
                     tags=(app,)
                 )
                 
-                # 记录日志：绘制时间流像素格
-                self.logger.info(f"绘制时间流像素格 - 应用: {app}, 位置: ({x}, {y}), 颜色: {color}, 持续时间: {dur:.2f}秒")
+                # 只对新增像素格记录日志
+                is_new_pixel = pixel_key not in self.drawn_pixels
+                if is_new_pixel:
+                    new_pixels_count += 1
+                    self.logger.info(f"绘制时间流像素格 - 应用: {app}, 位置: ({x}, {y}), 颜色: {color}, 持续时间: {dur:.2f}秒")
+                    self.drawn_pixels.add(pixel_key)
                 
                 current_col += 1
                 if current_col >= max_cols:
@@ -723,7 +740,7 @@ class CapsLockChecker:
         
         # 记录日志：时间流渲染完成
         total_blocks = sum(block_counts)
-        self.logger.info(f"时间流渲染完成 - 总应用数: {len(valid_history)}, 总像素格数: {total_blocks}, 画布宽度: {w}px, 画布高度: {self.history_bar_h}px")
+        self.logger.info(f"时间流渲染完成 - 总应用数: {len(valid_history)}, 总像素格数: {total_blocks}, 新增像素格数: {new_pixels_count}, 画布宽度: {w}px, 画布高度: {self.history_bar_h}px")
 
     def check_app_display_config(self, app_name, config_type):
         """
