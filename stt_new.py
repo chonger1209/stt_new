@@ -116,7 +116,7 @@ class CapsLockChecker:
         self.load_recent_cache_data()
         
         # 立即绘制历史流
-        self.render_history_stream()
+        self.render_history_stream(force_clear_pixels=True)
         # 绑定窗口大小变化事件，仅在宽度变化时重绘
         self.last_history_canvas_width = self.history_canvas.winfo_width()
         self.history_canvas.bind("<Configure>", self.on_history_canvas_configure)
@@ -148,7 +148,7 @@ class CapsLockChecker:
             # 如果统计面板打开，重新渲染
             if self.stats_toggle_var.get():
                 self.render_stats_chart()
-                self.render_history_stream()
+                self.render_history_stream(force_clear_pixels=True)
             self.logger.debug("延迟初始化完成，界面已刷新")
         except Exception as e:
             self.logger.error(f"延迟初始化时出错: {e}")
@@ -578,7 +578,7 @@ class CapsLockChecker:
             self.stats_container_frame.pack(expand=False, fill=tk.BOTH, pady=10)
             # 立即绘制统计图表和历史流条
             self.render_stats_chart()
-            self.render_history_stream()
+            self.render_history_stream(force_clear_pixels=True)
             
 
         else:
@@ -587,7 +587,7 @@ class CapsLockChecker:
             # 恢复原始窗口高度
             self.root.geometry(f"{self.root.winfo_width()}x{self.original_height}")
 
-    def render_history_stream(self):
+    def render_history_stream(self, force_clear_pixels=False):
         """
         优化的历史流渲染，修复内存泄漏问题
         """
@@ -656,8 +656,8 @@ class CapsLockChecker:
         # 清除历史点击绑定
         if hasattr(self, 'history_click_bindings'):
             self.history_click_bindings.clear()
-        # 清空已绘制像素格记录
-        if hasattr(self, 'drawn_pixels'):
+        # 只在强制清空时清空已绘制像素格记录
+        if force_clear_pixels and hasattr(self, 'drawn_pixels'):
             self.drawn_pixels.clear()
         
         if not valid_history:
@@ -822,7 +822,7 @@ class CapsLockChecker:
             y += bar_h + gap
         
         # 绘制历史流条到独立的canvas
-        self.render_history_stream()
+        self.render_history_stream(force_clear_pixels=True)
         
         # 设置滚动区域
         self.stats_canvas.config(scrollregion=self.stats_canvas.bbox("all"))
@@ -878,7 +878,7 @@ class CapsLockChecker:
         if prev_w is not None and event.width == prev_w:
             return
         self.last_history_canvas_width = event.width
-        self.render_history_stream()
+        self.render_history_stream(force_clear_pixels=True)
 
 
     
@@ -1219,7 +1219,7 @@ class CapsLockChecker:
         if hasattr(self, 'history_canvas'):
             self.history_canvas.configure(width=width)
         # 更新历史流显示
-        self.render_history_stream()
+        self.render_history_stream(force_clear_pixels=True)
         
         # 应用颜色设置
         self.color_caps_on = self.config.get("color_caps_on", "#fa6666")
