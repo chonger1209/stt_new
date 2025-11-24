@@ -591,6 +591,8 @@ class CapsLockChecker:
         """
         优化的历史流渲染，修复内存泄漏问题
         """
+        # 记录日志：开始渲染时间流
+        self.logger.info("开始渲染时间流 - 准备绘制像素格")
         # 获取数据
         db_history = self.get_today_time_stream_from_db()
         
@@ -704,6 +706,9 @@ class CapsLockChecker:
                     tags=(app,)
                 )
                 
+                # 记录日志：绘制时间流像素格
+                self.logger.info(f"绘制时间流像素格 - 应用: {app}, 位置: ({x}, {y}), 颜色: {color}, 持续时间: {dur:.2f}秒")
+                
                 current_col += 1
                 if current_col >= max_cols:
                     current_col = 0
@@ -715,6 +720,10 @@ class CapsLockChecker:
                 self.history_canvas.tag_bind(app, "<Leave>", self.hide_tooltip)
                 self.history_canvas.tag_bind(app, "<Motion>", lambda e, a=app: self.move_tooltip(e, a))
                 self.bound_canvas_tags.add(app)
+        
+        # 记录日志：时间流渲染完成
+        total_blocks = sum(block_counts)
+        self.logger.info(f"时间流渲染完成 - 总应用数: {len(valid_history)}, 总像素格数: {total_blocks}, 画布宽度: {w}px, 画布高度: {self.history_bar_h}px")
 
     def check_app_display_config(self, app_name, config_type):
         """
@@ -1308,6 +1317,49 @@ class CapsLockChecker:
                 self.config['software_list'] = []
         else:
             # 配置文件不存在，生成默认配置文件
+            # 初始化默认进程配置
+            self.config['process_config'] = {
+                'explorer.exe': {
+                    'display_name': 'Windows Explorer',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'chrome.exe': {
+                    'display_name': 'Google Chrome',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'wechat.exe': {
+                    'display_name': '微信',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'code.exe': {
+                    'display_name': 'Visual Studio Code',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'QQ.exe': {
+                    'display_name': 'QQ',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'CAXA.exe': {
+                    'display_name': 'CAXA',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'edge.exe': {
+                    'display_name': 'Microsoft Edge',
+                    'show_in_screen_time': True,
+                    'show_in_time_stream': True
+                },
+                'LockApp.exe': {
+                    'display_name': 'Lock Screen',
+                    'show_in_screen_time': False,
+                    'show_in_time_stream': True
+                }
+            }
             self.write_config_file()
     
     def save_window_state(self):
@@ -1373,55 +1425,9 @@ class CapsLockChecker:
             # 获取所有进程配置
             process_config = self.config.get('process_config', {})
             
-            # 写入默认的进程配置（包括Windows Explorer、Google Chrome等常见应用）
-            default_processes = {
-                'explorer.exe': {
-                    'display_name': 'Windows Explorer',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'chrome.exe': {
-                    'display_name': 'Google Chrome',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'wechat.exe': {
-                    'display_name': '微信',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'code.exe': {
-                    'display_name': 'Visual Studio Code',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'QQ.exe': {
-                    'display_name': 'QQ',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'CAXA.exe': {
-                    'display_name': 'CAXA',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'edge.exe': {
-                    'display_name': 'Microsoft Edge',
-                    'show_in_screen_time': True,
-                    'show_in_time_stream': True
-                },
-                'LockApp.exe': {
-                    'display_name': 'Lock Screen',
-                    'show_in_screen_time': False,
-                    'show_in_time_stream': True
-                }
-            }
-            
-            # 合并默认配置和现有的配置
-            all_processes = {**default_processes, **process_config}
-            
-            # 写入每个进程的配置
-            for process_name, config in all_processes.items():
+            # 只写入现有的进程配置，不再添加默认进程配置
+            # 这样可以保留用户的自定义设置
+            for process_name, config in process_config.items():
                 f.write(f'\n[{process_name}]\n')
                 f.write(f"display_name = {config.get('display_name', process_name)}\n")
                 f.write(f"show_in_screen_time = {'true' if config.get('show_in_screen_time', True) else 'false'}\n")
