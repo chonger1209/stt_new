@@ -34,6 +34,10 @@ class CapsLockChecker:
         self.leave_hide_timer = None  # 鼠标离开后延迟隐藏的计时器
         self.last_mouse_move_time = 0  # 记录上次鼠标移动时间
         
+        # 日志汇总相关变量
+        self.last_summary_log_time = 0  # 上次记录汇总日志的时间
+        self.logged_render_data_hashes = set()  # 已记录的渲染数据哈希值集合，用于去重
+        
 
         # 创建自定义标题栏
         self.titlebar = tk.Frame(self.root, bg=self.color_titlebar, height=30)
@@ -115,8 +119,11 @@ class CapsLockChecker:
         # 加载最近的缓存数据，防止程序重启后像素格丢失
         self.load_recent_cache_data()
         
+        # 初始化最后记录的像素格时间戳
+        self.init_last_logged_pixel_time()
+        
         # 立即绘制历史流
-        self.render_history_stream(is_config_change=True)
+        self.render_history_stream(log_new_pixels=False)
         # 绑定窗口大小变化事件，仅在宽度变化时重绘
         self.last_history_canvas_width = self.history_canvas.winfo_width()
         self.history_canvas.bind("<Configure>", self.on_history_canvas_configure)
@@ -133,6 +140,9 @@ class CapsLockChecker:
         # 记录程序初始化完成日志
         self.logger.info("程序初始化完成 - UI组件已创建，配置已加载，数据库已初始化")
         
+        # 记录初始应用使用情况汇总
+        self.log_app_usage_summary(force_log=True)
+        
         # 延迟初始化完成，确保所有组件正确渲染
         self.root.after(100, self._finish_initialization)
     
@@ -148,7 +158,7 @@ class CapsLockChecker:
             # 如果统计面板打开，重新渲染
             if self.stats_toggle_var.get():
                 self.render_stats_chart()
-                self.render_history_stream(is_config_change=True)
+                self.render_history_stream(log_new_pixels=False)
             self.logger.debug("延迟初始化完成，界面已刷新")
         except Exception as e:
             self.logger.error(f"延迟初始化时出错: {e}")
@@ -193,7 +203,7 @@ class CapsLockChecker:
         # 每30秒更新一次历史流渲染
         current_time = time.time()
         if current_time - self.last_history_render_time >= 30:
-            self.render_history_stream(is_config_change=False)  # 常规刷新
+            self.render_history_stream(log_new_pixels=True)
             self.last_history_render_time = current_time
         
         # 计划下次执行
@@ -203,6 +213,9 @@ class CapsLockChecker:
         """缓存刷新任务"""
         # 刷新缓存到数据库
         self.flush_time_stream_cache()
+        
+        # 记录应用使用情况汇总
+        self.log_app_usage_summary()
         
         # 清理过大的缓存
         self.cleanup_oversized_cache()
@@ -347,6 +360,21 @@ class CapsLockChecker:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_time_stream_timestamp ON time_stream (timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_time_stream_app ON time_stream (app_name)')
         
+        # 新增：创建已记录像素格表，用于跟踪已记录的像素格数据
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS logged_pixels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_name TEXT NOT NULL,
+                time_range_start TEXT NOT NULL,
+                time_range_end TEXT NOT NULL,
+                duration REAL NOT NULL,
+                log_timestamp TEXT NOT NULL,
+                UNIQUE(app_name, time_range_start, time_range_end)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_logged_pixels_app ON logged_pixels (app_name)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_logged_pixels_time_range ON logged_pixels (time_range_start, time_range_end)')
+        
         conn.commit()
         conn.close()
     
@@ -454,6 +482,108 @@ class CapsLockChecker:
                 self.time_stream_cache[self.current_app_name].append((timestamp, elapsed))
             
             self.last_grid_update_time = current_time
+    
+    def init_last_logged_pixel_time(self):
+        """初始化最后记录的像素格时间戳，用于检测新增像素格"""
+        try:
+            with sqlite3.connect(self.time_stream_db_file()) as conn:
+                cursor = conn.cursor()
+                # 获取最近记录的像素格时间戳
+                cursor.execute(
+                    'SELECT MAX(log_timestamp) FROM logged_pixels'
+                )
+                result = cursor.fetchone()
+                self.last_logged_pixel_time = result[0] if result and result[0] else None
+                self.logger.debug(f"初始化最后记录像素格时间戳: {self.last_logged_pixel_time}")
+        except Exception as e:
+            self.logger.error(f"初始化最后记录像素格时间戳时出错: {e}")
+            self.last_logged_pixel_time = None
+    
+    def detect_new_pixels(self, time_stream_data):
+        """
+        检测新增的像素格数据
+        Args:
+            time_stream_data: 时间流数据列表，格式为[(timestamp, app_name, duration), ...]
+        
+        Returns:
+            list: 新增的像素格数据列表，格式为[(timestamp, app_name, duration), ...]
+        """
+        if not time_stream_data:
+            return []
+        
+        # 如果没有记录过像素格，则所有数据都是新增的
+        if not self.last_logged_pixel_time:
+            return time_stream_data
+        
+        # 筛选出时间戳大于最后记录时间的数据
+        new_pixels = []
+        for timestamp, app_name, duration in time_stream_data:
+            if timestamp > self.last_logged_pixel_time:
+                new_pixels.append((timestamp, app_name, duration))
+        
+        return new_pixels
+    
+    def log_new_pixels(self, new_pixels):
+        """
+        记录新增的像素格数据到数据库
+        Args:
+            new_pixels: 新增的像素格数据列表，格式为[(timestamp, app_name, duration), ...]
+        """
+        if not new_pixels:
+            return
+        
+        try:
+            with sqlite3.connect(self.time_stream_db_file()) as conn:
+                cursor = conn.cursor()
+                
+                # 按应用分组
+                app_pixels = {}
+                for timestamp, app_name, duration in new_pixels:
+                    if app_name not in app_pixels:
+                        app_pixels[app_name] = []
+                    app_pixels[app_name].append((timestamp, duration))
+                
+                # 记录日志
+                log_lines = ["新增像素格记录:"]
+                total_new_pixels = 0
+                app_details = []
+                
+                # 记录到数据库
+                for app_name, pixels in app_pixels.items():
+                    for timestamp, duration in pixels:
+                        # 计算时间范围（简化处理，使用当前时间戳作为时间范围）
+                        time_range_start = timestamp
+                        time_range_end = timestamp
+                        log_timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # 插入数据库
+                        cursor.execute(
+                            'INSERT OR IGNORE INTO logged_pixels (app_name, time_range_start, time_range_end, duration, log_timestamp) VALUES (?, ?, ?, ?, ?)',
+                            (app_name, time_range_start, time_range_end, duration, log_timestamp)
+                        )
+                        
+                        total_new_pixels += 1
+                    
+                    # 计算总时长
+                    total_duration = sum(duration for _, duration in pixels)
+                    formatted_time = self.format_duration(total_duration)
+                    app_details.append(f"{app_name}: {len(pixels)}个像素格, 总时长: {formatted_time}")
+                
+                # 更新最后记录时间戳
+                if new_pixels:
+                    latest_timestamp = max(timestamp for timestamp, _, _ in new_pixels)
+                    self.last_logged_pixel_time = latest_timestamp
+                
+                # 提交事务
+                conn.commit()
+                
+                # 记录日志 - 合并为一行
+                if app_details:
+                    log_line = f"新增像素格记录: {'; '.join(app_details)}; 总计: {total_new_pixels}个新增像素格"
+                    self.logger.info(log_line)
+                
+        except Exception as e:
+            self.logger.error(f"记录新增像素格时出错: {e}")
     
     def load_recent_cache_data(self):
         """加载最近的缓存数据（优化版）"""
@@ -578,7 +708,7 @@ class CapsLockChecker:
             self.stats_container_frame.pack(expand=False, fill=tk.BOTH, pady=10)
             # 立即绘制统计图表和历史流条
             self.render_stats_chart()
-            self.render_history_stream(is_config_change=True)
+            self.render_history_stream()
             
 
         else:
@@ -587,12 +717,14 @@ class CapsLockChecker:
             # 恢复原始窗口高度
             self.root.geometry(f"{self.root.winfo_width()}x{self.original_height}")
 
-    def render_history_stream(self, is_config_change=False):
+    def render_history_stream(self, log_new_pixels=False):
         """
         优化的历史流渲染，修复内存泄漏问题
+        Args:
+            log_new_pixels: 是否记录新增像素的日志，默认为False
         """
-        # 记录日志：开始渲染时间流
-        self.logger.info("开始渲染时间流 - 准备绘制像素格")
+        # 记录日志：开始渲染时间流（改为DEBUG级别，减少日志噪音）
+        self.logger.debug("开始渲染时间流 - 准备绘制像素格")
         # 获取数据
         db_history = self.get_today_time_stream_from_db()
         
@@ -636,6 +768,16 @@ class CapsLockChecker:
         
         self.last_history_hash = current_history_hash
         self._is_initializing = False
+        
+        # 新增日志：记录将被渲染的应用数据（基于数据库查询结果）
+        self._log_render_data(valid_history)
+        
+        # 分离新增像素格检测逻辑
+        if log_new_pixels:
+            # 检测新增像素格
+            new_pixels = self.detect_new_pixels(all_history)
+            # 记录新增像素格
+            self.log_new_pixels(new_pixels)
         
         # 获取canvas尺寸
         w = self.history_canvas.winfo_width()
@@ -695,9 +837,6 @@ class CapsLockChecker:
         if not hasattr(self, 'drawn_pixels'):
             self.drawn_pixels = set()
         
-        # 记录新增像素格数量
-        new_pixels_count = 0
-        
         # 批量绘制方块
         for i, (app, dur) in enumerate(valid_history):
             count = block_counts[i]
@@ -719,12 +858,12 @@ class CapsLockChecker:
                     tags=(app,)
                 )
                 
-                # 只对新增像素格记录日志（仅在非配置更改场景下）
+                # 只对新增像素格记录日志（仅在log_new_pixels为True时）
                 is_new_pixel = pixel_key not in self.drawn_pixels
                 if is_new_pixel:
-                    new_pixels_count += 1
-                    if not is_config_change:  # 只在非配置更改场景下记录新增像素格日志
-                        self.logger.info(f"绘制时间流像素格 - 应用: {app}, 位置: ({x}, {y}), 颜色: {color}, 持续时间: {dur:.2f}秒")
+                    if log_new_pixels:
+                        # 改为DEBUG级别，减少日志噪音
+                        self.logger.debug(f"绘制时间流像素格 - 应用: {app}, 位置: ({x}, {y}), 颜色: {color}, 持续时间: {dur:.2f}秒")
                     self.drawn_pixels.add(pixel_key)
                 
                 current_col += 1
@@ -739,13 +878,118 @@ class CapsLockChecker:
                 self.history_canvas.tag_bind(app, "<Motion>", lambda e, a=app: self.move_tooltip(e, a))
                 self.bound_canvas_tags.add(app)
         
-        # 记录日志：时间流渲染完成
+        # 记录日志：时间流渲染完成（改为DEBUG级别，减少日志噪音）
         total_blocks = sum(block_counts)
-        self.logger.info(f"时间流渲染完成 - 总应用数: {len(valid_history)}, 总像素格数: {total_blocks}, 新增像素格数: {new_pixels_count}, 画布宽度: {w}px, 画布高度: {self.history_bar_h}px")
+        self.logger.debug(f"时间流渲染完成 - 总应用数: {len(valid_history)}, 总像素格数: {total_blocks}, 画布宽度: {w}px, 画布高度: {self.history_bar_h}px")
+
+    def _log_render_data(self, valid_history):
+        """
+        记录将被渲染的应用数据，基于数据库查询结果
+        Args:
+            valid_history: 经过过滤的有效历史数据列表，格式为[(app, duration), ...]
+        """
+        # 初始化已记录数据的哈希集合（用于去重）
+        if not hasattr(self, 'logged_render_data_hashes'):
+            self.logged_render_data_hashes = set()
+        
+        # 计算当前数据的哈希值
+        current_data_hash = hash(tuple(valid_history))
+        
+        # 检查是否已经记录过相同的数据
+        if current_data_hash in self.logged_render_data_hashes:
+            return
+        
+        # 记录新的数据哈希值
+        self.logged_render_data_hashes.add(current_data_hash)
+        
+        # 按应用分组并计算总时长
+        app_data = {}
+        for app, duration in valid_history:
+            if app not in app_data:
+                app_data[app] = 0
+            app_data[app] += duration
+        
+        # 记录日志：将被渲染的应用数据
+        if app_data:
+            self.logger.info("时间流数据渲染 - 将被渲染的应用数据:")
+            for app, total_duration in sorted(app_data.items(), key=lambda x: x[1], reverse=True):
+                self.logger.info(f"  应用: {app}, 总时长: {self.format_duration(total_duration)}")
+        else:
+            self.logger.info("时间流数据渲染 - 没有将被渲染的数据")
+
+    def _log_render_data(self, valid_history):
+        """
+        记录将被渲染的应用数据（基于数据库查询结果）
+        使用数据哈希值实现去重，避免重复记录相同数据
+        """
+        # 计算数据哈希值
+        data_hash = hash(tuple(valid_history))
+        
+        # 如果数据已记录过，则跳过
+        if data_hash in self.logged_render_data_hashes:
+            return
+        
+        # 记录数据哈希值，避免重复记录
+        self.logged_render_data_hashes.add(data_hash)
+        
+        # 不再记录应用使用情况汇总日志
+    
+    def log_app_usage_summary(self, force_log=False):
+        """
+        汇总记录应用使用情况
+        Args:
+            force_log: 是否强制记录日志，忽略时间间隔检查
+        """
+        current_time = time.time()
+        
+        # 检查是否需要记录日志（默认每10分钟记录一次）
+        if not force_log and (current_time - self.last_summary_log_time) < 600:
+            return
+        
+        # 获取今天的屏幕使用时间数据
+        screen_time_data = self.get_screen_time_from_db()
+        
+        # 添加当前应用的临时时间
+        if self.current_app_name:
+            elapsed = current_time - self.current_start_time
+            screen_time_data[self.current_app_name] = screen_time_data.get(self.current_app_name, 0) + elapsed
+        
+        # 过滤掉不需要显示的应用
+        filtered_data = {}
+        for app, duration in screen_time_data.items():
+            if self.check_app_display_config(app, 'show_in_screen_time'):
+                filtered_data[app] = duration
+        
+        # 按使用时长排序
+        sorted_apps = sorted(filtered_data.items(), key=lambda x: x[1], reverse=True)
+        
+        # 计算总使用时间
+        total_time = sum(duration for _, duration in sorted_apps)
+        
+        # 格式化日志输出
+        log_lines = ["=" * 50]
+        log_lines.append(f"应用使用情况汇总 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+        log_lines.append(f"总使用时间: {self.format_duration(total_time)}")
+        log_lines.append("-" * 50)
+        
+        # 显示前10个应用
+        for i, (app_name, duration) in enumerate(sorted_apps[:10], 1):
+            percentage = (duration / total_time * 100) if total_time > 0 else 0
+            formatted_time = self.format_duration(duration)
+            log_lines.append(f"{i:2d}. {app_name}: {formatted_time} ({percentage:.1f}%)")
+        
+        log_lines.append("=" * 50)
+        
+        # 记录日志
+        self.logger.info("\n".join(log_lines))
+        
+        # 更新最后记录时间
+        self.last_summary_log_time = current_time
 
     def check_app_display_config(self, app_name, config_type):
         """
-        检查应用的显示配置
+        检查应用是否应该在特定组件中显示
+        Args:
         config_type: 'show_in_screen_time' 或 'show_in_time_stream'
         """
         if 'process_config' not in self.config:
@@ -823,7 +1067,7 @@ class CapsLockChecker:
             y += bar_h + gap
         
         # 绘制历史流条到独立的canvas
-        self.render_history_stream(is_config_change=True)
+        self.render_history_stream(log_new_pixels=False)
         
         # 设置滚动区域
         self.stats_canvas.config(scrollregion=self.stats_canvas.bbox("all"))
@@ -879,7 +1123,7 @@ class CapsLockChecker:
         if prev_w is not None and event.width == prev_w:
             return
         self.last_history_canvas_width = event.width
-        self.render_history_stream(is_config_change=True)
+        self.render_history_stream(log_new_pixels=False)
 
 
     
@@ -1126,6 +1370,10 @@ class CapsLockChecker:
             self.logger.info("程序退出 - 将缓存中的时间流数据写入数据库")
             self.flush_time_stream_cache()
         
+        # 记录最终应用使用情况汇总
+        self.logger.info("程序退出 - 记录最终应用使用情况汇总")
+        self.log_app_usage_summary(force_log=True)
+        
         # 清理Canvas资源
         if hasattr(self, 'history_canvas'):
             self.history_canvas.delete("all")
@@ -1220,7 +1468,7 @@ class CapsLockChecker:
         if hasattr(self, 'history_canvas'):
             self.history_canvas.configure(width=width)
         # 更新历史流显示
-        self.render_history_stream(is_config_change=True)
+        self.render_history_stream()
         
         # 应用颜色设置
         self.color_caps_on = self.config.get("color_caps_on", "#fa6666")
