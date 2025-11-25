@@ -34,8 +34,7 @@ class CapsLockChecker:
         self.leave_hide_timer = None  # 鼠标离开后延迟隐藏的计时器
         self.last_mouse_move_time = 0  # 记录上次鼠标移动时间
         
-        # 日志汇总相关变量
-        self.last_summary_log_time = 0  # 上次记录汇总日志的时间
+        # 日志相关变量
         self.logged_render_data_hashes = set()  # 已记录的渲染数据哈希值集合，用于去重
         
 
@@ -140,9 +139,6 @@ class CapsLockChecker:
         # 记录程序初始化完成日志
         self.logger.info("程序初始化完成 - UI组件已创建，配置已加载，数据库已初始化")
         
-        # 记录初始应用使用情况汇总
-        self.log_app_usage_summary(force_log=True)
-        
         # 延迟初始化完成，确保所有组件正确渲染
         self.root.after(100, self._finish_initialization)
     
@@ -213,9 +209,6 @@ class CapsLockChecker:
         """缓存刷新任务"""
         # 刷新缓存到数据库
         self.flush_time_stream_cache()
-        
-        # 记录应用使用情况汇总
-        self.log_app_usage_summary()
         
         # 清理过大的缓存
         self.cleanup_oversized_cache()
@@ -934,58 +927,6 @@ class CapsLockChecker:
         
         # 不再记录应用使用情况汇总日志
     
-    def log_app_usage_summary(self, force_log=False):
-        """
-        汇总记录应用使用情况
-        Args:
-            force_log: 是否强制记录日志，忽略时间间隔检查
-        """
-        current_time = time.time()
-        
-        # 检查是否需要记录日志（默认每10分钟记录一次）
-        if not force_log and (current_time - self.last_summary_log_time) < 600:
-            return
-        
-        # 获取今天的屏幕使用时间数据
-        screen_time_data = self.get_screen_time_from_db()
-        
-        # 添加当前应用的临时时间
-        if self.current_app_name:
-            elapsed = current_time - self.current_start_time
-            screen_time_data[self.current_app_name] = screen_time_data.get(self.current_app_name, 0) + elapsed
-        
-        # 过滤掉不需要显示的应用
-        filtered_data = {}
-        for app, duration in screen_time_data.items():
-            if self.check_app_display_config(app, 'show_in_screen_time'):
-                filtered_data[app] = duration
-        
-        # 按使用时长排序
-        sorted_apps = sorted(filtered_data.items(), key=lambda x: x[1], reverse=True)
-        
-        # 计算总使用时间
-        total_time = sum(duration for _, duration in sorted_apps)
-        
-        # 格式化日志输出
-        log_lines = ["=" * 50]
-        log_lines.append(f"应用使用情况汇总 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
-        log_lines.append(f"总使用时间: {self.format_duration(total_time)}")
-        log_lines.append("-" * 50)
-        
-        # 显示前10个应用
-        for i, (app_name, duration) in enumerate(sorted_apps[:10], 1):
-            percentage = (duration / total_time * 100) if total_time > 0 else 0
-            formatted_time = self.format_duration(duration)
-            log_lines.append(f"{i:2d}. {app_name}: {formatted_time} ({percentage:.1f}%)")
-        
-        log_lines.append("=" * 50)
-        
-        # 记录日志
-        self.logger.info("\n".join(log_lines))
-        
-        # 更新最后记录时间
-        self.last_summary_log_time = current_time
-
     def check_app_display_config(self, app_name, config_type):
         """
         检查应用是否应该在特定组件中显示
@@ -1369,10 +1310,6 @@ class CapsLockChecker:
         if hasattr(self, 'time_stream_cache') and self.time_stream_cache:
             self.logger.info("程序退出 - 将缓存中的时间流数据写入数据库")
             self.flush_time_stream_cache()
-        
-        # 记录最终应用使用情况汇总
-        self.logger.info("程序退出 - 记录最终应用使用情况汇总")
-        self.log_app_usage_summary(force_log=True)
         
         # 清理Canvas资源
         if hasattr(self, 'history_canvas'):
