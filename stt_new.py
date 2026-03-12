@@ -81,12 +81,14 @@ class CapsLockChecker:
         # 初始化颜色和渲染优化变量
         self._init_color_and_rendering_vars()
         
-        # 创建UI组件
-        self._create_ui_components()
-
         # 读取配置文件
         self.read_config()
         self.grid_second_per_block = self.config.get('grid_second_per_block', 60)  # 设置grid_second_per_block属性
+        # 读取倒计时时长配置
+        self.timer_total_seconds = self.config.get('timer_duration_minutes', 25) * 60
+        
+        # 创建UI组件
+        self._create_ui_components()
         
         # 优化后的内存缓存机制 - 使用deque限制大小
         self.MAX_CACHE_SIZE = 1000  # 限制缓存最大记录数
@@ -108,6 +110,13 @@ class CapsLockChecker:
         self.last_window_height = self.root.winfo_height()  # 记录上次窗口高度
         self.height_change_detected = False  # 是否检测到高度变化
         self.auto_restore_timer = None  # 自动恢复窗口高度的计时器
+        
+        # 倒计时功能变量
+        self.timer_running = False
+        self.timer_paused = False
+        self.timer_seconds = 0
+        self.timer_total_seconds = 25 * 60  # 默认25分钟
+        self.timer_interval = None
         
         # 初始化数据库
         self.init_db()
@@ -885,6 +894,10 @@ class CapsLockChecker:
         if not hasattr(self, 'logged_render_data_hashes'):
             self.logged_render_data_hashes = set()
         
+        # 限制哈希集合大小，防止内存泄漏
+        if len(self.logged_render_data_hashes) > 1000:
+            self.logged_render_data_hashes.clear()
+        
         # 计算当前数据的哈希值
         current_data_hash = hash(tuple(valid_history))
         
@@ -910,23 +923,6 @@ class CapsLockChecker:
         else:
             self.logger.info("时间流数据渲染 - 没有将被渲染的数据")
 
-    def _log_render_data(self, valid_history):
-        """
-        记录将被渲染的应用数据（基于数据库查询结果）
-        使用数据哈希值实现去重，避免重复记录相同数据
-        """
-        # 计算数据哈希值
-        data_hash = hash(tuple(valid_history))
-        
-        # 如果数据已记录过，则跳过
-        if data_hash in self.logged_render_data_hashes:
-            return
-        
-        # 记录数据哈希值，避免重复记录
-        self.logged_render_data_hashes.add(data_hash)
-        
-        # 不再记录应用使用情况汇总日志
-    
     def check_app_display_config(self, app_name, config_type):
         """
         检查应用是否应该在特定组件中显示
@@ -1333,9 +1329,16 @@ class CapsLockChecker:
         current_color = self.color_caps_on if self.caps_lock_on else self.color_caps_off
         self.main_frame.configure(bg=current_color)
         self.label_container.configure(bg=current_color)
-        self.inner_frame.configure(bg=current_color)
+        # 更新CAPS lock状态显示
+        if hasattr(self, 'caps_frame') and self.caps_frame:
+            self.caps_frame.configure(bg=current_color)
         self.caps_text_label.configure(bg=current_color)
         self.status_value_label.configure(bg=current_color)
+        # 更新倒计时组件的背景色
+        if hasattr(self, 'timer_frame') and self.timer_frame:
+            self.timer_frame.configure(bg=current_color)
+            self.timer_buttons_frame.configure(bg=current_color)
+            self.timer_label.configure(bg=current_color)
         # 更新统计组件的背景色
         if hasattr(self, 'stats_container_frame') and self.stats_container_frame:
             self.stats_container_frame.configure(bg=current_color)
@@ -1445,7 +1448,8 @@ class CapsLockChecker:
 
             'grid_second_per_block': 30,
 
-            'screen_time_refresh_frequency': 10  # 屏幕显示时间刷新率，单位：次/10秒
+            'screen_time_refresh_frequency': 10,  # 屏幕显示时间刷新率，单位：次/10秒
+            'timer_duration_minutes': 25  # 倒计时时长（分钟）
         }
         
         if os.path.exists('config.txt'):
@@ -1466,7 +1470,8 @@ class CapsLockChecker:
 
                 'grid_second_per_block': int,
 
-                'screen_time_refresh_frequency': int
+                'screen_time_refresh_frequency': int,
+                'timer_duration_minutes': int
             }
             
             # 初始化进程配置字典
@@ -1617,6 +1622,10 @@ class CapsLockChecker:
 
             f.write('# screen_time_refresh_frequency: 屏幕时间刷新频率，单位次/10秒(默认10次)\n')
             f.write(f"screen_time_refresh_frequency = {self.config.get('screen_time_refresh_frequency', 10)}\n")  # 写入屏幕显示时间刷新率（单位：次/10秒）
+            
+            # 写入倒计时配置
+            f.write('# timer_duration_minutes: 倒计时时长（分钟）\n')
+            f.write(f"timer_duration_minutes = {self.config.get('timer_duration_minutes', 25)}\n")
             
             # 写入进程配置（新格式，带进程头）
             f.write('\n# 进程配置\n')
@@ -1819,32 +1828,32 @@ class CapsLockChecker:
         self.label_container = tk.Frame(self.main_frame, bg=self.main_frame['bg'])
         self.label_container.pack(expand=True, fill=tk.BOTH)
 
-        # 创建内部容器用于居中显示
-        self.inner_frame = tk.Frame(self.label_container, bg=self.main_frame['bg'])
-        self.inner_frame.pack(expand=True)
+        # 创建左上角的CAPS lock状态显示
+        self.caps_frame = tk.Frame(self.label_container, bg=self.main_frame['bg'])
+        self.caps_frame.pack(anchor='nw', padx=10, pady=10)  # 减小pady，降低高度
 
         # 添加固定文本标签（"Caps Lock"）
         self.caps_text_label = tk.Label(
-            self.inner_frame,
+            self.caps_frame,
             text="Caps Lock",
-            font=("Arial", 22, "bold"),
+            font=("Arial", 10, "bold"),  # 进一步减小字体大小
             fg="white",
             bg=self.main_frame['bg']
         )
-        self.caps_text_label.pack(side=tk.LEFT, padx=(0, 5))  # 固定文本右侧留5px间距
+        self.caps_text_label.pack(side=tk.LEFT, padx=(0, 1))  # 进一步减小间距
 
         # 添加动态状态标签（"ON"/"OFF"）
         self.status_value_label = tk.Label(
-            self.inner_frame,
+            self.caps_frame,
             text="ON" if self.caps_lock_on else "OFF",
-            font=("Arial", 22, "bold"),
+            font=("Arial", 10, "bold"),  # 进一步减小字体大小
             fg="white",
             bg=self.main_frame['bg'],
         )
         self.status_value_label.pack(side=tk.LEFT)  # 动态状态标签紧随其后
 
-        # 设置状态标签的固定宽度，确保ON/OFF切换时Caps Lock文本不动
-        self.status_value_label.configure(width=4)  # 设置固定宽度为4个字符，足够容纳"OFF"
+        # 添加倒计时功能组件
+        self._create_timer_components()
         
         # 创建历史流条canvas，放置在CPAS区域底部
         self.history_canvas = tk.Canvas(self.main_frame, bg=self.main_frame['bg'], height=self.history_bar_h, borderwidth=0, highlightthickness=0)
@@ -1900,6 +1909,75 @@ class CapsLockChecker:
         # 绑定鼠标滚轮事件
         self.stats_canvas.bind_all("<MouseWheel>", lambda event: self.stats_canvas.yview_scroll(int(-1*(event.delta/120)), "units"))
     
+    def _create_timer_components(self):
+        """创建倒计时组件"""
+        # 创建倒计时容器（居中）
+        self.timer_frame = tk.Frame(self.label_container, bg=self.main_frame['bg'])
+        self.timer_frame.pack(expand=True, fill=tk.BOTH)
+        
+        # 创建倒计时显示标签（居中，字体适当）
+        self.timer_label = tk.Label(
+            self.timer_frame,
+            text=self.format_duration(self.timer_total_seconds),
+            font=("Arial", 24, "bold"),  # 减小字体大小
+            fg="white",
+            bg=self.main_frame['bg']
+        )
+        self.timer_label.pack(expand=True, pady=(0, 1))  # 进一步减少间距，让倒计时更靠上
+        
+        # 创建按钮容器（居中）
+        self.timer_buttons_frame = tk.Frame(self.timer_frame, bg=self.main_frame['bg'])
+        self.timer_buttons_frame.pack(pady=(1, 1))  # 进一步减少下方间距，为时间流腾出更多空间
+        
+        # 创建开始按钮（使用符号）
+        self.start_button = tk.Button(
+            self.timer_buttons_frame,
+            text="▶",  # 播放符号
+            command=self.start_timer,
+            font=("Arial", 9),  # 字体更小
+            fg="white",
+            bg="#3498db",  # 蓝色
+            relief=tk.FLAT,
+            padx=2,  # 调整内边距
+            pady=2,  # 调整内边距，使按钮为正方形
+            width=2,  # 宽度
+            height=1  # 高度，使按钮为正方形
+        )
+        self.start_button.pack(side=tk.LEFT, padx=2)  # 缩小间距
+        
+        # 创建暂停按钮（使用符号）
+        self.pause_button = tk.Button(
+            self.timer_buttons_frame,
+            text="⏸",  # 暂停符号
+            command=self.pause_timer,
+            font=("Arial", 9),  # 字体更小
+            fg="white",
+            bg="#9b59b6",  # 紫色
+            relief=tk.FLAT,
+            padx=2,  # 调整内边距
+            pady=2,  # 调整内边距，使按钮为正方形
+            width=2,  # 宽度
+            height=1,  # 高度，使按钮为正方形
+            state=tk.DISABLED
+        )
+        self.pause_button.pack(side=tk.LEFT, padx=2)  # 缩小间距
+        
+        # 创建重置按钮（使用符号）
+        self.reset_button = tk.Button(
+            self.timer_buttons_frame,
+            text="⏹",  # 停止符号
+            command=self.reset_timer,
+            font=("Arial", 9),  # 字体更小
+            fg="white",
+            bg="#95a5a6",  # 灰色
+            relief=tk.FLAT,
+            padx=2,  # 调整内边距
+            pady=2,  # 调整内边距，使按钮为正方形
+            width=2,  # 宽度
+            height=1  # 高度，使按钮为正方形
+        )
+        self.reset_button.pack(side=tk.LEFT, padx=2)  # 缩小间距
+    
     def check_window_height_change(self):
         """检测窗口高度变化，如果从window_height变大则启动30秒倒计时"""
         current_height = self.root.winfo_height()
@@ -1913,6 +1991,61 @@ class CapsLockChecker:
         
         # 更新上次记录的窗口高度
         self.last_window_height = current_height
+    
+    def start_timer(self):
+        """开始倒计时"""
+        if not self.timer_running:
+            self.timer_running = True
+            self.timer_paused = False
+            self.timer_seconds = self.timer_total_seconds
+            self.update_timer()
+            # 更新按钮状态
+            self.start_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.NORMAL)
+            self.reset_button.config(state=tk.NORMAL)
+    
+    def pause_timer(self):
+        """暂停倒计时"""
+        if self.timer_running:
+            self.timer_running = False
+            self.timer_paused = True
+            if self.timer_interval:
+                self.root.after_cancel(self.timer_interval)
+                self.timer_interval = None
+            # 更新按钮状态
+            self.start_button.config(state=tk.NORMAL)
+            self.pause_button.config(state=tk.DISABLED)
+    
+    def reset_timer(self):
+        """重置倒计时"""
+        self.timer_running = False
+        self.timer_paused = False
+        self.timer_seconds = self.timer_total_seconds
+        if self.timer_interval:
+            self.root.after_cancel(self.timer_interval)
+            self.timer_interval = None
+        # 更新显示
+        self.timer_label.config(text=self.format_duration(self.timer_seconds))
+        # 更新按钮状态
+        self.start_button.config(state=tk.NORMAL)
+        self.pause_button.config(state=tk.DISABLED)
+        self.reset_button.config(state=tk.NORMAL)
+    
+    def update_timer(self):
+        """更新倒计时"""
+        if self.timer_running and self.timer_seconds > 0:
+            self.timer_seconds -= 1
+            self.timer_label.config(text=self.format_duration(self.timer_seconds))
+            self.timer_interval = self.root.after(1000, self.update_timer)
+        elif self.timer_seconds <= 0:
+            self.timer_running = False
+            self.timer_label.config(text="00:00")
+            # 播放提示音或其他提示
+            self.start_button.config(state=tk.NORMAL)
+            self.pause_button.config(state=tk.DISABLED)
+            if self.timer_interval:
+                self.root.after_cancel(self.timer_interval)
+                self.timer_interval = None
     
     def start_auto_restore_timer(self):
         """启动30秒倒计时，倒计时结束后自动恢复窗口高度"""
