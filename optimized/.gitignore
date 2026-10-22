@@ -1,0 +1,10 @@
+__pycache__/
+build/
+dist/
+logs/
+*.db
+*.db-*
+config.txt
+*.bak
+*.tmp
+*.exe

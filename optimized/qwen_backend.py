@@ -1,0 +1,402 @@
+"""STT adapter to the installed Qwen toolkit; never owns a second switch/config file."""
+import importlib.util
+import ctypes
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+import threading
+import urllib.error
+import urllib.request  # Required by the dynamically loaded toolkit in a frozen EXE.
+
+import psutil  # Also makes the toolkit's process dependency available in the EXE.
+
+
+def idle_remaining(activity, reset_at, now, timeout=7200):
+    """None means unknown/busy, never permission to stop a service."""
+    last = activity.get('last_request_at')
+    busy = activity.get('in_flight')
+    if (not isinstance(busy, (int, float)) or not math.isfinite(busy) or busy != 0
+            or not isinstance(last, (int, float)) or isinstance(last, bool)
+            or not math.isfinite(last) or last <= 0 or last > now):
+        return None
+    if not isinstance(reset_at, (int, float)) or isinstance(reset_at, bool) or not math.isfinite(reset_at):
+        return None
+    if reset_at > now:
+        return None
+    return max(0.0, timeout - (now - max(last, reset_at)))
+
+
+def launch_external(command, **kwargs):
+    """Do not leak the frozen app's DLL directory into Strata's Python."""
+    if not (getattr(sys, 'frozen', False) and os.name == 'nt'):
+        return subprocess.Popen(command, **kwargs)
+    bundle = Path(sys._MEIPASS).resolve()
+    environment = dict(kwargs.pop('env', os.environ))
+    environment['PATH'] = os.pathsep.join(
+        item for item in environment.get('PATH', '').split(os.pathsep)
+        if item and not Path(item).resolve().is_relative_to(bundle))
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.GetDllDirectoryW.argtypes = [ctypes.c_uint32, ctypes.c_wchar_p]
+    kernel.GetDllDirectoryW.restype = ctypes.c_uint32
+    kernel.SetDllDirectoryW.argtypes = [ctypes.c_wchar_p]
+    kernel.SetDllDirectoryW.restype = ctypes.c_int
+    length = kernel.GetDllDirectoryW(0, None)
+    previous = ctypes.create_unicode_buffer(length) if length else None
+    if previous is not None:
+        kernel.GetDllDirectoryW(length, previous)
+    if not kernel.SetDllDirectoryW(None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return subprocess.Popen(command, env=environment, **kwargs)
+    finally:
+        if not kernel.SetDllDirectoryW(previous.value if previous is not None else None):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+
+def find_toolkit():
+    for path in [Path.home() / '.agents/skills/qwen-collaboration',
+                 Path.home() / '.codex/skills/qwen-collaboration']:
+        scripts = path.resolve() / 'scripts'
+        if (scripts / 'manager.py').is_file() and (scripts / 'lifecycle.py').is_file():
+            return scripts
+    raise FileNotFoundError('未找到用户级千问管理工具，请先安装千问协作技能')
+
+
+def _module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ToolkitBackend:
+    def __init__(self, scripts=None, idle_minutes=120):
+        self.scripts = scripts
+        self.manager = self.lifecycle = None
+        self._import_lock = threading.RLock()
+        self._launch_gate = threading.Lock()
+        self._context = threading.local()
+        self._launched = None
+        self.set_idle_minutes(idle_minutes)
+
+    def execute(self, action, cancelled):
+        self._context.cancelled = cancelled
+        try:
+            self._check_cancelled()
+            return getattr(self, action)()
+        finally:
+            self._context.cancelled = None
+
+    def _check_cancelled(self):
+        event = getattr(self._context, 'cancelled', None)
+        if event is not None and event.is_set():
+            raise RuntimeError('操作已被强制退出取消')
+
+    def set_idle_minutes(self, minutes):
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes <= 0:
+            raise ValueError('闲置时间必须是正整数分钟')
+        self.idle_seconds = minutes * 60
+
+    def _load(self):
+        with self._import_lock:
+            return self._load_locked()
+
+    def _load_locked(self):
+        if self.manager is None:
+            self.scripts = Path(self.scripts) if self.scripts else find_toolkit()
+            manager = _module('_stt_qwen_manager', self.scripts / 'manager.py')
+            # lifecycle imports manager by its original name. Bind it only during
+            # import, then restore the application's module namespace.
+            previous = sys.modules.get('manager')
+            sys.modules['manager'] = manager
+            try:
+                lifecycle = _module('_stt_qwen_lifecycle', self.scripts / 'lifecycle.py')
+            finally:
+                if previous is None:
+                    sys.modules.pop('manager', None)
+                else:
+                    sys.modules['manager'] = previous
+            self.manager, self.lifecycle = manager, lifecycle
+        return self.manager, self.lifecycle
+
+    def status(self):
+        try:
+            manager, lifecycle = self._load()
+            config = manager.config()
+            switches = manager.state()
+            probe = manager.probe(config)
+            base = {'model': config['model'], 'enabled': switches['enabled'],
+                    'auto_start': switches['auto_start']}
+            if not probe.get('reachable'):
+                if manager.port_busy(config):
+                    return dict(base, state='error', detail='本地端口有服务但无法核验身份，暂不提供启停')
+                return dict(base, state='off', detail='千问服务已停止')
+            if probe.get('error') or probe.get('service') != 'strata':
+                return dict(base, state='error', detail='服务身份或模型不匹配，未执行任何启停')
+            activity = lifecycle.service_activity(config)
+            if config.get('lifecycle', {}).get('owner') == 'stt' and not config['lifecycle'].get('enabled'):
+                now = time.time()
+                remaining = (idle_remaining(activity, self._reset_at(manager), now, self.idle_seconds)
+                             if activity['loaded'] else None)
+                base.update(idle_remaining_seconds=remaining,
+                            idle_deadline=now + remaining if remaining is not None else None)
+            if activity['in_flight'] > 0:
+                return dict(base, state='busy', detail='千问正在处理或排队任务；强制退出会中断任务')
+            if not activity['loaded']:
+                return dict(base, state='unloaded', detail='模型已卸载，接收服务保留；本地或局域网请求可自动唤醒')
+            return dict(base, state='ready', detail='千问模型已就绪')
+        except FileNotFoundError:
+            return {'state': 'unconfigured', 'detail': '未找到用户级千问管理工具或服务配置'}
+        except urllib.error.HTTPError as error:
+            return {'state': 'error', 'detail': f'本地服务查询失败（HTTP {error.code}）'}
+        except Exception:
+            return {'state': 'error', 'detail': '千问状态查询失败，请检查全局管理工具和本地服务'}
+
+    @staticmethod
+    def _reset_at(manager):
+        path = manager.ROOT / 'runtime' / 'stt-idle-reset.json'
+        try:
+            return manager.read_json(path)['at']
+        except FileNotFoundError:
+            return 0.0
+        except (OSError, ValueError, KeyError, TypeError):
+            return float('nan')  # Corrupt metadata is not permission to close.
+
+    def reset_idle(self):
+        manager, lifecycle = self._load()
+        with manager.lock('model-request', timeout=.3), manager.lock('startup', timeout=.3):
+            config = manager.config()
+            if config.get('lifecycle', {}).get('owner') != 'stt' or config['lifecycle'].get('enabled'):
+                return {'ok': False, 'message': '闲置关闭尚未由 STT 接管'}
+            lifecycle.service_activity(config)  # Verify service identity before resetting.
+            manager.atomic_json(manager.ROOT / 'runtime' / 'stt-idle-reset.json', {'at': time.time()})
+            return {'ok': True, 'message': f'已重置：接下来{self.idle_seconds // 60}分钟内不会因闲置卸载模型'}
+
+    def idle_shutdown(self):
+        return self.unload(idle_seconds=self.idle_seconds)
+
+    def ensure_service(self):
+        return self.start(only_service=True)
+
+    @staticmethod
+    def _control(manager, config):
+        if not config.get('stt_control'):
+            return None
+        try:
+            result = manager.request_json(config['base_url'] + '/stt/control', config)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None  # A loopback-only old service can be closed for upgrade.
+            raise
+        if (result.get('version') != 1 or result.get('model') != config['model']
+                or result.get('service') != 'strata'):
+            raise ValueError('服务控制协议不匹配')
+        return result
+
+    def _watchdog(self, config):
+        """Use the configured Python, never sys.executable when STT is frozen."""
+        manager, lifecycle = self._load()
+        if not config.get('lifecycle', {}).get('enabled'):
+            return
+        with manager.lock('watchdog-spawn', timeout=2):
+            runtime = manager.ROOT / 'runtime'
+            runtime.mkdir(exist_ok=True)
+            record = runtime / 'watchdog.json'
+            try:
+                if lifecycle.alive(manager.read_json(record)):
+                    return
+            except (OSError, ValueError, KeyError):
+                pass
+            # The installed toolkit is Python; the same Strata interpreter runs its watcher.
+            flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
+            with (runtime / 'watchdog.log').open('ab') as log:
+                process = launch_external(
+                    [config['launch']['command'], '-X', 'utf8', '-B', str(self.scripts / 'lifecycle.py'), 'watch'],
+                    cwd=str(manager.ROOT), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                    creationflags=flags)
+            manager.atomic_json(record, dict(lifecycle.identity(process.pid), started_at=manager.now()))
+
+    def start(self, only_service=False):
+        self._check_cancelled()
+        manager, lifecycle = self._load()
+        config = manager.config()
+        wait = min(300, max(1, float(config.get('startup_timeout_sec', 180))))
+        load_requested = False
+        # Explicit user action: keep enabled/auto_start untouched, including when false.
+        with manager.lock('model-request', timeout=.3), manager.lock('startup', timeout=.3):
+            probe = manager.probe(config)
+            self._check_cancelled()
+            if probe.get('reachable') and not probe.get('error'):
+                control = self._control(manager, config)
+                if control and control.get('exiting'):
+                    manager.request_json(config['base_url'] + '/stt/cancel-exit', config,
+                                         {'model': config['model']})
+            if probe.get('ready') and probe.get('service') == 'strata':
+                return {'ok': True, 'message': '千问已经就绪'}
+            if probe.get('reachable'):
+                if probe.get('error') or probe.get('service') != 'strata':
+                    return {'ok': False, 'message': '端口上的服务或模型不匹配，未启动第二份服务'}
+                if only_service:
+                    return {'ok': True, 'message': '千问接收服务已运行，保留当前模型状态'}
+                self._check_cancelled()
+                manager.request_json(config['base_url'] + '/load', config,
+                                     {'model': config['model']}, timeout=wait)
+                load_requested = True
+            else:
+                if manager.port_busy(config):
+                    return {'ok': False, 'message': '本地端口已占用，未启动第二份服务'}
+                launch = config['launch']
+                if not Path(launch['command']).is_file() or not Path(launch['cwd']).is_dir():
+                    return {'ok': False, 'message': '全局千问配置中的启动程序或目录不存在'}
+                runtime = manager.ROOT / 'runtime'
+                runtime.mkdir(exist_ok=True)
+                flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
+                with (runtime / 'service.log').open('ab') as log:
+                    with self._launch_gate:
+                        self._check_cancelled()
+                        process = launch_external([launch['command'], *launch['args']], cwd=launch['cwd'],
+                                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                                   creationflags=flags, env=manager.service_environment(config))
+                        self._launched = lifecycle.identity(process.pid)
+                manager.atomic_json(runtime / 'last-launch.json',
+                                    {'pid': process.pid, 'at': manager.now(), 'model': config['model']})
+            self._check_cancelled()
+            self._watchdog(config)
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline:
+                self._check_cancelled()
+                probe = manager.probe(config)
+                self._check_cancelled()
+                if (only_service and probe.get('reachable') and not probe.get('error')
+                        and probe.get('service') == 'strata'):
+                    return {'ok': True, 'message': '千问接收服务已准备好，首次请求可加载模型'}
+                if probe.get('ready') and probe.get('service') == 'strata':
+                    return {'ok': True, 'message': '千问已启动并就绪'}
+                if (not only_service and not load_requested and probe.get('reachable')
+                        and not probe.get('error') and probe.get('service') == 'strata'
+                        and probe.get('loaded') is False):
+                    load_requested = True
+                    manager.request_json(config['base_url'] + '/load', config,
+                                         {'model': config['model']}, timeout=wait)
+                time.sleep(.7)
+            return {'ok': False, 'message': '启动等待超时；服务可能仍在加载，请等待状态刷新'}
+
+    def force_stop(self):
+        """Explicit user abort: OS identities only, no HTTP or model locks."""
+        manager, lifecycle = self._load()
+        config = manager.config()
+        with self._launch_gate:
+            roots = []
+            if manager.port_busy(config):
+                service = lifecycle.identify_service(config)
+                roots.append(service['root'])
+            if self._launched and lifecycle.alive(self._launched):
+                process = psutil.Process(self._launched['pid'])
+                if not lifecycle.server_matches(process, config):
+                    raise ValueError('启动进程身份不匹配，未结束进程')
+                if self._launched not in roots:
+                    roots.append(self._launched)
+            targets = {}
+            suspended = []
+            try:
+                # Suspend parents before enumerating descendants so a loading
+                # model cannot spawn an untracked child during the snapshot.
+                def collect(process):
+                    record = lifecycle.identity(process.pid)
+                    key = (record['pid'], record['created'])
+                    if key in targets:
+                        return
+                    process.suspend()
+                    suspended.append((process, record))
+                    targets[key] = (process, record)
+                    for child in process.children():
+                        try:
+                            collect(child)
+                        except psutil.NoSuchProcess:
+                            pass
+                for record in roots:
+                    if lifecycle.alive(record):
+                        collect(psutil.Process(record['pid']))
+                for process, record in reversed(list(targets.values())):
+                    if lifecycle.alive(record):
+                        process.kill()
+                _, pending = psutil.wait_procs([p for p, _ in targets.values()], timeout=5)
+                if pending or manager.port_busy(config):
+                    return {'ok': False, 'message': '强制退出未完成：仍有进程或端口占用，请查看状态'}
+                self._launched = None
+                return {'ok': True, 'message': '千问服务已强制退出，正在执行的任务已中断'}
+            except psutil.AccessDenied:
+                return {'ok': False, 'message': '权限不足，强制退出未完成'}
+            finally:
+                for process, record in suspended:
+                    try:
+                        if lifecycle.alive(record):
+                            process.resume()
+                    except psutil.NoSuchProcess:
+                        pass
+
+    def stop(self):
+        return self._shutdown(terminate=True)
+
+    def unload(self, idle_seconds=None):
+        return self._shutdown(idle_seconds=idle_seconds, terminate=False)
+
+    def _shutdown(self, idle_seconds=None, terminate=False):
+        self._check_cancelled()
+        manager, lifecycle = self._load()
+        with manager.lock('model-request', timeout=.3), manager.lock('startup', timeout=.3):
+            config = manager.config()
+            automatic = idle_seconds is not None
+            if automatic and (config.get('lifecycle', {}).get('owner') != 'stt'
+                              or config['lifecycle'].get('enabled')):
+                return None
+            if not manager.port_busy(config):
+                return {'ok': True, 'message': '千问服务已经停止'}
+            activity = lifecycle.service_activity(config)
+            if automatic and not activity.get('loaded'):
+                return None
+            if automatic and idle_remaining(activity, self._reset_at(manager), time.time(), idle_seconds) != 0:
+                return None
+            if activity['in_flight']:
+                return {'ok': False, 'message': '千问正在处理或排队任务，未关闭；请空闲后重试'}
+            service = lifecycle.identify_service(config)
+            control = self._control(manager, config)
+            if (terminate and not control and config.get('stt_control')
+                    and any(address not in ('127.0.0.1', '::1')
+                            for address in service.get('listener_addresses', []))):
+                return {'ok': False, 'message': '旧版局域网服务缺少安全退出协议，未结束进程'}
+            if automatic:
+                # Re-read activity and manual extension after identifying the process tree.
+                activity = lifecycle.service_activity(config)
+                if idle_remaining(activity, self._reset_at(manager), time.time(), idle_seconds) != 0:
+                    return None
+            body = {'model': config['model']}
+            if control and automatic:
+                body['idle_seconds'] = idle_seconds
+            endpoint = ('/stt/prepare-exit' if terminate else '/stt/unload') if control else '/unload'
+            self._check_cancelled()
+            result = manager.request_json(config['base_url'] + endpoint, config, body, timeout=75)
+            if result.get('status') not in ('unloaded', 'not loaded'):
+                return {'ok': False, 'message': '未确认模型已卸载，未结束任何服务进程'}
+            if not terminate:
+                lifecycle.event('stt_idle_unload' if automatic else 'stt_manual_unload',
+                                root_pid=service['root']['pid'], model=config['model'])
+                return {'ok': True, 'message': '模型已卸载，接收服务保留，可自动唤醒'}
+            stopped = False
+            try:
+                stopped = lifecycle.stop_verified_service(config, service)
+                if not stopped:
+                    return {'ok': False, 'message': '服务状态已变化或尚未完全退出，请查看最新状态'}
+            finally:
+                if control and not stopped:
+                    try:
+                        manager.request_json(config['base_url'] + '/stt/cancel-exit', config,
+                                             {'model': config['model']})
+                    except Exception:
+                        pass  # Explicit start recovers an interrupted exit on next use.
+            lifecycle.event('stt_idle_stop' if automatic else 'stt_manual_stop',
+                            root_pid=service['root']['pid'], model=config['model'])
+            return {'ok': True, 'message': '千问服务已完全停止；后续任务仍可按全局规则自动启动'}

@@ -1,3 +1,14 @@
+# STT：旧版与优化版并存
+
+| 版本 | 下载 | 源码 |
+|---|---|---|
+| 2026.10.22 优化试用版 | [新版发布页](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.22) | [optimized/](optimized/) |
+| 旧版 2.0 | [旧版发布页](https://github.com/chonger1209/stt_new/releases/tag/stt_new) | 根目录 stt_new.py、dist/stt_new.exe |
+
+新版增加后台数据库读写、单实例保护、时间流累计修复与可选千问管理。旧版下载、标签和入口文件保留。升级请保留自己的配置和历史数据库，详情见 [新版说明](optimized/README.md)。
+
+---
+
 # Screen Time Tracker / 屏幕时间追踪器
 
 ## English
