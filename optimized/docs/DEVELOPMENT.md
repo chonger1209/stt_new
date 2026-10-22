@@ -30,6 +30,7 @@ python stt_new.py
 | `settings.py` | 默认值、中文模板、旧配置升级、读取校验与坐标保存 |
 | `qwen_control.py` | 后台管理队列、状态查询、独立强退与取消旧操作 |
 | `qwen_backend.py` | 兼容外部管理工具包、启动/加载/卸载、进程身份核验和强退 |
+| `qwen_status.py` | 指标白名单、阶段优先级、速度归零和文字对比度 |
 | `qwen_service.py` | Strata 接收层适配：网段准入、本机管理与请求/卸载竞争保护 |
 | `smoke_test.py` | 临时数据目录、模拟千问、真实 Tk 控件检查 |
 
@@ -68,10 +69,10 @@ python -m unittest test_regressions test_async_storage test_single_instance test
 ## 完整工具包与 Strata 模拟测试
 
 ```powershell
-python -m unittest test_regressions test_async_storage test_single_instance test_qwen test_qwen_force -q
+python -m unittest test_regressions test_async_storage test_single_instance test_qwen test_qwen_force test_qwen_status -q
 ```
 
-发布开发环境为 90 项。`test_qwen` 中的部分用例动态加载外部工具包，不具备工具包时不能把失败解释为普通 STT 无法使用。
+发布开发环境为 104 项。`test_qwen` 中的部分用例动态加载外部工具包，不具备工具包时不能把失败解释为普通 STT 无法使用。
 
 ```powershell
 python -m unittest test_qwen_service -q

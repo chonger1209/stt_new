@@ -16,6 +16,7 @@ class QwenController:
         if autostart:
             self._requests.put_nowait('ensure_service')
         self._next_idle_check = 0.0
+        self._poll_fast = False
         self._closed = threading.Event()
         self._generation = 0
         self._cancelled = threading.Event()
@@ -113,12 +114,13 @@ class QwenController:
         with self._lock:
             if generation == self._generation and not cancelled.is_set():
                 self._latest_status = status
+                self._poll_fast = status.get('state') == 'busy'
 
     def _loop(self, generation, cancelled, requests):
         self._status(generation, cancelled)
         while not self._closed.is_set() and not cancelled.is_set():
             try:
-                action = requests.get(timeout=self.interval)
+                action = requests.get(timeout=min(self.interval, 1.0) if self._poll_fast else self.interval)
             except queue.Empty:
                 self._status(generation, cancelled)
                 continue

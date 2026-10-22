@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request  # Required by the dynamically loaded toolkit in a frozen EXE.
 
 import psutil  # Also makes the toolkit's process dependency available in the EXE.
+from qwen_status import metrics_display
 
 
 def idle_remaining(activity, reset_at, now, timeout=7200):
@@ -137,14 +138,38 @@ class ToolkitBackend:
             if probe.get('error') or probe.get('service') != 'strata':
                 return dict(base, state='error', detail='服务身份或模型不匹配，未执行任何启停')
             activity = lifecycle.service_activity(config)
+            presentation = {'display_phase': 'busy' if activity['in_flight'] > 0 else 'idle',
+                            'generation_tps': None, 'metrics_available': False, 'metrics_active': False}
+            if activity['loaded'] or activity['in_flight'] > 0:
+                try:
+                    from urllib.parse import urlsplit, urlunsplit
+                    parts = urlsplit(config['base_url'])
+                    url = urlunsplit((parts.scheme, parts.netloc, '/metrics', '', ''))
+                    payload = manager.request_json(url, config, timeout=.8)
+                    presentation = metrics_display(payload, activity['loaded'], activity['in_flight'])
+                except (OSError, ValueError, TypeError):
+                    pass  # Optional metrics must not make a healthy service unusable.
+            base.update(presentation)
             if config.get('lifecycle', {}).get('owner') == 'stt' and not config['lifecycle'].get('enabled'):
                 now = time.time()
                 remaining = (idle_remaining(activity, self._reset_at(manager), now, self.idle_seconds)
-                             if activity['loaded'] else None)
+                             if activity['loaded'] and not presentation['metrics_active'] else None)
                 base.update(idle_remaining_seconds=remaining,
                             idle_deadline=now + remaining if remaining is not None else None)
-            if activity['in_flight'] > 0:
-                return dict(base, state='busy', detail='千问正在处理或排队任务；强制退出会中断任务')
+            if activity['in_flight'] > 0 or presentation['metrics_active']:
+                if presentation['display_phase'] in ('idle', 'unloaded'):
+                    base['display_phase'] = 'busy'  # A non-atomic endpoint transition cannot declare it idle.
+                detail = '千问正在处理或排队任务；强制退出会中断任务'
+                if presentation.get('phase_detail'):
+                    detail += '\n阶段：' + presentation['phase_detail']
+                if presentation['metrics_available']:
+                    detail += '\n执行：{}；排队：{}；引擎等待：{}'.format(
+                        presentation['running_count'], presentation['queued_count'], presentation['waiting_count'])
+                    if presentation.get('prompt_total') and presentation.get('prompt_read') is not None:
+                        detail += '\n上下文进度：{} / {} token'.format(presentation['prompt_read'], presentation['prompt_total'])
+                else:
+                    detail += '\n细分指标暂不可用，保留忙碌保护'
+                return dict(base, state='busy', detail=detail)
             if not activity['loaded']:
                 return dict(base, state='unloaded', detail='模型已卸载，接收服务保留；本地或局域网请求可自动唤醒')
             return dict(base, state='ready', detail='千问模型已就绪')

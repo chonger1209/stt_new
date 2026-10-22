@@ -24,6 +24,7 @@ class SimulatedQwen:
         self.resets = 0
         self.minutes = 120
         self.unloads = 0
+        self.presentation = {}
 
     def set_idle_minutes(self, minutes):
         self.minutes = minutes
@@ -36,7 +37,7 @@ class SimulatedQwen:
 
     def status(self):
         return {'state': self.state, 'detail': 'isolated Qwen UI test',
-                'idle_remaining_seconds': self.remaining, 'idle_deadline': 12345}
+                'idle_remaining_seconds': self.remaining, 'idle_deadline': 12345, **self.presentation}
 
     def reset_idle(self):
         self.resets += 1
@@ -152,7 +153,7 @@ def run():
             result['qwen_font'] = app.qwen_status_font.actual()
             app.show_titlebar()
             root.update()
-            for widget in (app.qwen_label, app.qwen_button, app.qwen_exit_button):
+            for widget in (app.qwen_label, app.qwen_speed_label, app.qwen_button, app.qwen_exit_button):
                 assert widget.winfo_rooty() >= app.titlebar.winfo_rooty() + app.titlebar.winfo_height()
                 assert widget.winfo_rootx() + widget.winfo_width() <= root.winfo_rootx() + root.winfo_width()
             assert app.qwen_label.winfo_rootx() >= app.timer_label.winfo_rootx() + app.timer_label.winfo_width()
@@ -169,6 +170,34 @@ def run():
                        - (app.qwen_button.winfo_rooty() + app.qwen_button.winfo_height() / 2)) <= 1
             result['qwen_layout'] = 'passed (two centered columns, shared status and button rows, below title bar)'
             assert app.qwen_label.winfo_width() > 1
+            assert app.qwen_speed_label.winfo_y() >= app.qwen_label.winfo_y() + app.qwen_label.winfo_height()
+            assert app.qwen_speed_label.winfo_y() + app.qwen_speed_label.winfo_height() <= app.qwen_buttons.winfo_y()
+            assert app.qwen_speed_label.cget('font') == str(app.qwen_control_font)
+            positions = None
+            simulated_qwen.state = 'busy'
+            for phase, name, speed, expected in (
+                    ('reading', '预读', None, '0.0 T/s'),
+                    ('generating', '生成', 57.6, '57.6 T/s'),
+                    ('generating', '生成', 12345.6, '12345.6 T/s'),
+                    ('generating', '生成', None, '— T/s'),
+                    ('queued', '排队', 57.6, '0.0 T/s'),
+                    ('loading', '加载中', None, '0.0 T/s')):
+                simulated_qwen.presentation = {'display_phase': phase, 'generation_tps': speed,
+                                               'metrics_available': True}
+                pump_until(lambda: app.qwen_controller._pending is None)
+                app.qwen_action('status')
+                pump_until(lambda: name in app.qwen_label.cget('text') and app.qwen_speed_label.cget('text') == expected)
+                assert str(app.qwen_button.cget('state')) == 'disabled'
+                geometry = tuple((w.winfo_x(), w.winfo_y(), w.winfo_width(), w.winfo_height())
+                                 for w in (app.timer_label, app.qwen_speed_label, app.qwen_buttons))
+                if positions is None:
+                    positions = geometry
+                assert positions == geometry, 'Speed or phase moved other controls'
+                for caps in (True, False):
+                    app.caps_lock_on = caps
+                    app.update_main_frame_bg()
+            simulated_qwen.presentation = {}
+            result['qwen_stage_and_speed'] = 'passed (reading/generating/queued/loading, zero/unknown, fixed geometry, both backgrounds)'
             simulated_qwen.state = 'ready'
             simulated_qwen.remaining = 60
             app.qwen_action('status')

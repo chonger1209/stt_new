@@ -192,7 +192,8 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(self.backend.status()['state'], 'off')
         self.manager.probe.return_value = {'reachable': True, 'error': 'mismatch'}
         self.assertEqual(self.backend.status()['state'], 'error')
-        self.manager.request_json.assert_not_called()
+        self.assertTrue(all(call.args[0].endswith('/metrics') and len(call.args) == 2
+                            for call in self.manager.request_json.call_args_list))
         self.manager.ensure.assert_not_called()
 
     def test_busy_stop_does_not_unload_or_terminate(self):

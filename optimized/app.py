@@ -19,6 +19,7 @@ from storage import AsyncHistoryStore
 from tracking import Countdown, UsageTracker, timeline_blocks
 from qwen_backend import ToolkitBackend
 from qwen_control import QwenController
+from qwen_status import readable_color, rate_text
 
 
 class CapsLockChecker:
@@ -33,6 +34,8 @@ class CapsLockChecker:
         self._jobs = {}
         self._qwen_status = {'state': 'checking', 'detail': '正在读取本地千问状态'}
         self._qwen_note = ''
+        self._qwen_paint_key = None
+        self._qwen_color_cache = {}
         self._qwen_force_armed_until = 0
         self._history_bindings = []
         self._history_key = None
@@ -370,7 +373,7 @@ class CapsLockChecker:
                                     for text in ('休眠服务', '启动服务', '强制退出'))
                                  / max(1, self.qwen_control_font.measure('0')))
         self.qwen_buttons = tk.Frame(self.timer_frame, bg=self.main_frame.cget('bg'))
-        self.qwen_buttons.grid(row=1, column=1, pady=(1, 1))
+        self.qwen_buttons.grid(row=2, column=1, pady=(1, 1))
         self.qwen_button = tk.Button(self.qwen_buttons, text='启动服务', width=button_width,
                                      font=self.qwen_control_font, relief=tk.FLAT, padx=5, pady=2,
                                      bg=self.color_titlebar, fg='white', state=tk.DISABLED,
@@ -383,7 +386,12 @@ class CapsLockChecker:
         self.qwen_label = tk.Label(self.timer_frame, text='· 千问检测中', font=self.qwen_status_font,
                                    fg='#333333', bg=self.main_frame['bg'])
         self.qwen_label.grid(row=0, column=1, pady=(0, 1), padx=4)
-        for widget in (self.qwen_label, self.qwen_button, self.qwen_exit_button):
+        self.qwen_speed_label = tk.Label(self.timer_frame, text='— T/s', width=12,
+                                         font=self.qwen_control_font, anchor='center',
+                                         bg=self.main_frame['bg'], fg='#333333')
+        self.qwen_speed_label.grid(row=1, column=1, pady=(3, 6))
+        self.timer_frame.grid_rowconfigure(1, minsize=self.qwen_control_font.metrics('linespace') + 9)
+        for widget in (self.qwen_label, self.qwen_speed_label, self.qwen_button, self.qwen_exit_button):
             widget.bind('<Enter>', self.show_qwen_details)
             widget.bind('<Leave>', self.hide_tooltip)
 
@@ -420,21 +428,37 @@ class CapsLockChecker:
                   'unconfigured': ('未配置', '#333333', '启动服务')}
         state = self._qwen_status.get('state', 'error')
         name, color, button = labels.get(state, labels['error'])
+        phase = 'idle' if state == 'ready' else state
+        if state == 'busy':
+            phase = self._qwen_status.get('display_phase', 'busy')
+            name = {'reading': '预读', 'generating': '生成', 'queued': '排队',
+                    'loading': '加载中'}.get(phase, '工作')
         operation = self.qwen_controller.operation
         if operation:
             name = {'start': '启动中', 'stop': '退出中', 'force_stop': '退出中', 'unload': '休眠中',
                     'ensure_service': '准备中', 'reset_idle': '延时中'}[operation]
-            color = '#663c00'
+            phase = 'loading'
         enabled = not operation and state not in ('checking', 'busy', 'unconfigured')
-        self.qwen_label.configure(text='· 千问' + name, fg=color)
-        self.qwen_button.configure(text=button, state=tk.NORMAL if enabled else tk.DISABLED)
-        self.qwen_exit_button.configure(
-            text='确认退出' if time.monotonic() < self._qwen_force_armed_until else '强制退出',
-            state=tk.DISABLED if operation == 'force_stop' else tk.NORMAL)
-        self.right_click_menu.entryconfigure(self._qwen_start_menu,
-            state=tk.NORMAL if not operation and state in ('off', 'unloaded', 'ready') else tk.DISABLED)
-        self.right_click_menu.entryconfigure(self._qwen_stop_menu,
-            state=tk.NORMAL if not operation and state in ('ready', 'unloaded') else tk.DISABLED)
+        background = self.main_frame.cget('bg')
+        color_key = (phase, background)
+        if color_key not in self._qwen_color_cache:
+            rgb = tuple(value / 65535 for value in self.root.winfo_rgb(background))
+            self._qwen_color_cache[color_key] = readable_color(phase, rgb)
+        color = self._qwen_color_cache[color_key]
+        rate = rate_text(self._qwen_status, operation)
+        confirm = '确认退出' if time.monotonic() < self._qwen_force_armed_until else '强制退出'
+        key = (name, color, button, enabled, confirm, operation, state, rate)
+        if key != self._qwen_paint_key:
+            self._qwen_paint_key = key
+            self.qwen_label.configure(text='· 千问' + name, fg=color)
+            self.qwen_speed_label.configure(text=rate, fg=color)
+            self.qwen_button.configure(text=button, state=tk.NORMAL if enabled else tk.DISABLED)
+            self.qwen_exit_button.configure(text=confirm,
+                state=tk.DISABLED if operation == 'force_stop' else tk.NORMAL)
+            self.right_click_menu.entryconfigure(self._qwen_start_menu,
+                state=tk.NORMAL if not operation and state in ('off', 'unloaded', 'ready') else tk.DISABLED)
+            self.right_click_menu.entryconfigure(self._qwen_stop_menu,
+                state=tk.NORMAL if not operation and state in ('ready', 'unloaded') else tk.DISABLED)
         self._update_qwen_reminder()
 
     def _update_qwen_reminder(self):
@@ -828,6 +852,9 @@ class CapsLockChecker:
         if hasattr(self, 'qwen_label'):
             self.qwen_buttons.configure(bg=current_color)
             self.qwen_label.configure(bg=current_color)
+            self.qwen_speed_label.configure(bg=current_color)
+            if hasattr(self, 'qwen_controller'):
+                self._paint_qwen_status()
         if hasattr(self, 'timer_frame') and self.timer_frame:
             self.timer_frame.configure(bg=current_color)
             self.timer_buttons_frame.configure(bg=current_color)
@@ -1027,7 +1054,7 @@ class CapsLockChecker:
         self.timer_label.grid(row=0, column=0, pady=(0, 1))
 
         self.timer_buttons_frame = tk.Frame(self.timer_frame, bg=self.main_frame['bg'])
-        self.timer_buttons_frame.grid(row=1, column=0, pady=(1, 1))
+        self.timer_buttons_frame.grid(row=2, column=0, pady=(1, 1))
 
         self.start_button = tk.Button(
             self.timer_buttons_frame,
