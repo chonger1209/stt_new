@@ -105,6 +105,7 @@ class AsyncStorageTests(unittest.TestCase):
     def test_cross_day_read_and_write_ack_order_never_double_counts(self):
         tomorrow = dt.datetime.combine(dt.date.today() + dt.timedelta(days=1), dt.time()).timestamp()
         self.tracker.start = tomorrow - 10
+        self.tracker._start_elapsed = tomorrow - 10
         self.clock[0] = tomorrow + 5
         self.tracker.capture()
         self.tracker.flush()

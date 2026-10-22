@@ -14,7 +14,7 @@
 
 **全局配置必须放在第一个 `[进程名]` 之前。** 某字段看似不生效时，先检查它是否被放进了进程配置节。
 
-## 全部 13 项全局配置
+## 全部 22 项全局配置
 
 | 字段 | 默认值 | 含义与生效行为 |
 |---|---|---|
@@ -31,8 +31,19 @@
 | `screen_time_refresh_frequency` | `10` | 统计刷新次数/10 秒，正整数；当前最快每秒一次 |
 | `timer_duration_minutes` | `25` | 番茄倒计时分钟数，正整数 |
 | `qwen_idle_timeout_minutes` | `120` | 千问连续闲置多久后卸载模型，分钟、正整数；需兼容千问环境 |
+| `qwen_enabled` | `true` | 是否启用千问管理；true/false。false 不查询、不启动、不自动休眠，普通统计照常。 |
+| `qwen_prepare_service_on_start` | `true` | STT 启动时是否准备接收服务；true/false。不主动加载模型。 |
+| `qwen_toolkit_path` | `留空` | 完整管理工具包目录，内含 scripts/manager.py 和 lifecycle.py；留空自动查找。示例 E:/AI/qwen-management。 |
+| `qwen_base_url` | `留空` | 本机服务地址，例 http://127.0.0.1:8765/v1；留空沿用工具包。不能填写远程 IP。 |
+| `qwen_model_id` | `留空` | 服务公布的模型 ID，不一定等于模型文件夹名称；留空沿用工具包。 |
+| `qwen_python_path` | `留空` | 模型环境的 python.exe 完整路径；例 E:/AI/Strata/.venv/Scripts/python.exe。留空沿用工具包。 |
+| `qwen_working_directory` | `留空` | 模型服务工作目录，例 E:/AI/Strata；留空沿用工具包。 |
+| `qwen_launch_args` | `留空` | 启动参数，填 JSON 字符串数组，建议路径用 /；例 ["serve/server.py", "--port", "8765"]。 |
+| `qwen_startup_timeout_seconds` | `180` | 整个启动操作的总等待预算，单位秒，正整数；默认180。 |
 
-无效颜色由界面检查后回退默认色。整数格式错误或应为正数却小于等于 0 时回退默认值，并记录原因。布尔值请按表填写；不要把“不认识的文字”当作一种受支持的开关值。
+无效颜色由界面检查后回退默认色。整数格式错误或应为正数却小于等于 0 时回退默认值，并记录原因。布尔值拼写无效会警告并回退默认值；不要把“不认识的文字”当作受支持的开关值。
+
+千问路径和启动参数需要区分“刷新暂存”与“下次启动服务生效”，详见 [换机配置教程](QWEN_SETUP.md)。启动参数使用 JSON 字符串数组，不使用 shell 命令拼接。
 
 ## 常见修改示例
 

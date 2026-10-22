@@ -164,6 +164,7 @@ class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.backend = ToolkitBackend()
         self.manager, self.lifecycle = Mock(), Mock()
+        self.http = self.manager.request_json
         self.backend._load = Mock(return_value=(self.manager, self.lifecycle))
         self.config = {'base_url': 'http://127.0.0.1:8080/v1', 'model': 'test', 'startup_timeout_sec': 1}
         self.manager.config.return_value = self.config
@@ -193,13 +194,13 @@ class AdapterTests(unittest.TestCase):
         self.manager.probe.return_value = {'reachable': True, 'error': 'mismatch'}
         self.assertEqual(self.backend.status()['state'], 'error')
         self.assertTrue(all(call.args[0].endswith('/metrics') and len(call.args) == 2
-                            for call in self.manager.request_json.call_args_list))
+                            for call in self.http.call_args_list))
         self.manager.ensure.assert_not_called()
 
     def test_busy_stop_does_not_unload_or_terminate(self):
         self.lifecycle.service_activity.return_value = {'loaded': True, 'in_flight': 1}
         self.assertFalse(self.backend.stop()['ok'])
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
         self.lifecycle.identify_service.assert_not_called()
         self.lifecycle.stop_verified_service.assert_not_called()
         self.assertEqual(self.lock_order, ['model-request', 'startup'])
@@ -208,7 +209,7 @@ class AdapterTests(unittest.TestCase):
         self.lifecycle.identify_service.side_effect = ValueError('identity mismatch')
         with self.assertRaises(ValueError):
             self.backend.stop()
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
         self.lifecycle.stop_verified_service.assert_not_called()
 
     def test_reloaded_or_newly_busy_service_not_force_stopped(self):
@@ -231,12 +232,12 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(self.backend.start()['ok'])
         self.manager.set_state.assert_not_called()
         self.manager.ensure.assert_not_called()
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
 
     def test_startup_reuses_unloaded_service_without_loading(self):
         self.manager.probe.return_value = {'reachable': True, 'ready': False, 'service': 'strata'}
         self.assertTrue(self.backend.ensure_service()['ok'])
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
         self.manager.set_state.assert_not_called()
 
     def test_startup_busy_service_is_read_only(self):
@@ -244,7 +245,9 @@ class AdapterTests(unittest.TestCase):
         self.lifecycle.service_activity.return_value = {'loaded': True, 'in_flight': 1}
         self.manager.request_json.return_value = {'version': 1, 'model': 'test', 'service': 'strata', 'exiting': False}
         self.assertTrue(self.backend.ensure_service()['ok'])
-        self.manager.request_json.assert_called_once_with(self.config['base_url'] + '/stt/control', self.config)
+        self.http.assert_called_once()
+        self.assertEqual(self.http.call_args.args[:2], (self.config['base_url'] + '/stt/control', self.config))
+        self.assertLessEqual(self.http.call_args.kwargs['timeout'], 3)
         self.lifecycle.stop_verified_service.assert_not_called()
 
     def test_atomic_idle_protocol_carries_configured_seconds(self):
@@ -253,7 +256,7 @@ class AdapterTests(unittest.TestCase):
         self.backend.set_idle_minutes(7)
         with patch('qwen_backend.time.time', return_value=1420):
             self.assertTrue(self.backend.idle_shutdown()['ok'])
-        self.manager.request_json.assert_called_once_with(
+        self.http.assert_called_once_with(
             self.config['base_url'] + '/stt/unload', self.config,
             {'model': 'test', 'idle_seconds': 420}, timeout=75)
         self.lifecycle.stop_verified_service.assert_not_called()
@@ -263,9 +266,9 @@ class AdapterTests(unittest.TestCase):
         self.backend._control = Mock(return_value={'version': 1})
         self.lifecycle.stop_verified_service.return_value = False
         self.assertFalse(self.backend.stop()['ok'])
-        self.assertEqual(self.manager.request_json.call_args_list[0].args[0],
+        self.assertEqual(self.http.call_args_list[0].args[0],
                          self.config['base_url'] + '/stt/prepare-exit')
-        self.assertEqual(self.manager.request_json.call_args_list[-1].args[0],
+        self.assertEqual(self.http.call_args_list[-1].args[0],
                          self.config['base_url'] + '/stt/cancel-exit')
 
     def test_manual_sleep_keeps_listener_and_switches(self):
@@ -279,7 +282,7 @@ class AdapterTests(unittest.TestCase):
         self.lifecycle.service_activity.return_value['loaded'] = False
         self.assertIsNone(self.backend.status()['idle_remaining_seconds'])
         self.assertIsNone(self.backend.idle_shutdown())
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
 
     def test_changed_timeout_controls_boundary_and_status(self):
         self.prepare_idle()
@@ -311,8 +314,10 @@ class AdapterTests(unittest.TestCase):
             {'reachable': True, 'ready': True, 'service': 'strata'}]
         self.backend._watchdog = Mock()
         self.assertTrue(self.backend.start()['ok'])
-        self.manager.request_json.assert_called_once_with(
-            self.config['base_url'] + '/load', self.config, {'model': 'test'}, timeout=1)
+        self.http.assert_called_once()
+        self.assertEqual(self.http.call_args.args, (self.config['base_url'] + '/load', self.config, {'model': 'test'}))
+        self.assertGreater(self.http.call_args.kwargs['timeout'], 0)
+        self.assertLessEqual(self.http.call_args.kwargs['timeout'], 1)
         self.manager.set_state.assert_not_called()
 
     def prepare_idle(self):
@@ -337,7 +342,7 @@ class AdapterTests(unittest.TestCase):
         self.backend._reset_at.return_value = 8199
         with patch('qwen_backend.time.time', return_value=8200):
             self.assertIsNone(self.backend.idle_shutdown())
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
 
     def test_new_task_between_idle_check_and_unload_wins(self):
         self.prepare_idle()
@@ -346,7 +351,7 @@ class AdapterTests(unittest.TestCase):
             {'loaded': True, 'in_flight': 0, 'last_request_at': 8199}]
         with patch('qwen_backend.time.time', return_value=8200):
             self.assertIsNone(self.backend.idle_shutdown())
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
 
     def test_idle_busy_or_unknown_never_unloads(self):
         self.prepare_idle()
@@ -355,7 +360,7 @@ class AdapterTests(unittest.TestCase):
             self.lifecycle.service_activity.return_value = activity
             with patch('qwen_backend.time.time', return_value=2800):
                 self.assertIsNone(self.backend.idle_shutdown())
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
 
     def test_idle_owner_or_old_watchdog_enabled_refuses_management(self):
         self.prepare_idle()
@@ -371,7 +376,7 @@ class AdapterTests(unittest.TestCase):
             self.assertTrue(self.backend.reset_idle()['ok'])
         self.manager.atomic_json.assert_called_once_with(
             Path('toolkit/runtime/stt-idle-reset.json'), {'at': 2500})
-        self.manager.request_json.assert_not_called()
+        self.http.assert_not_called()
         self.manager.ensure.assert_not_called()
 
     def test_status_poll_does_not_write_idle_reset_clock(self):

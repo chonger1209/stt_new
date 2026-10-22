@@ -2,6 +2,19 @@
 import datetime as dt
 import math
 import time
+import logging
+import os
+
+
+def active_seconds():
+    """Windows awake time: unaffected by clock correction and excludes suspend."""
+    if os.name == 'nt':
+        import ctypes
+        value = ctypes.c_ulonglong()
+        if not ctypes.windll.kernel32.QueryUnbiasedInterruptTime(ctypes.byref(value)):
+            raise ctypes.WinError()
+        return value.value / 10_000_000
+    return time.monotonic()
 
 
 def split_interval(app, start, end):
@@ -21,20 +34,44 @@ def split_interval(app, start, end):
 
 
 class UsageTracker:
-    def __init__(self, store, clock=time.time):
+    def __init__(self, store, clock=time.time, elapsed_clock=None, logger=None):
         self.store = store
+        self.logger = logger or logging.getLogger(__name__)
         self.clock = clock
+        # A supplied legacy test clock remains a single deterministic clock.
+        self.elapsed_clock = elapsed_clock or (active_seconds if clock is time.time else clock)
         self.app = None
         self.start = clock()
+        self._start_elapsed = self.elapsed_clock()
+        self._observed = (self.start, self._start_elapsed)
         self.pending = []
         self._inflight = None
         self._flush_requested = False
 
-    def capture(self, now=None):
+    def _rows(self, now, elapsed):
+        duration = max(0.0, elapsed - self._start_elapsed)
+        if not self.app or not duration:
+            return []
+        # Calendar stamps still use local wall time; elapsed duration never does.
+        start = self.start if abs((now - self.start) - duration) < 2 else now - duration
+        return split_interval(self.app, start, start + duration)
+
+    def heartbeat(self):
+        wall, elapsed = self.clock(), self.elapsed_clock()
+        old_wall, old_elapsed = self._observed
+        self._observed = (wall, elapsed)
+        if abs((wall - old_wall) - (elapsed - old_elapsed)) > 2:
+            self.capture(wall, elapsed)
+            self.app = None
+            return True
+        return False
+
+    def capture(self, now=None, elapsed=None):
         now = self.clock() if now is None else now
-        if self.app:
-            self.pending.extend(split_interval(self.app, self.start, now))
+        elapsed = self.elapsed_clock() if elapsed is None else elapsed
+        self.pending.extend(self._rows(now, elapsed))
         self.start = now
+        self._start_elapsed = elapsed
         # Bound pending memory by saving, never by discarding unsaved records.
         if len(self.pending) >= 1000:
             self.flush()
@@ -61,18 +98,28 @@ class UsageTracker:
         self._inflight = batch
         def committed(_):
             # Later samples may have been appended while this batch was saving.
-            assert tuple(self.pending[:len(batch)]) == batch
-            del self.pending[:len(batch)]
+            if len(self.pending) >= len(batch) and all(row is expected for row, expected in zip(self.pending, batch)):
+                del self.pending[:len(batch)]
+            else:
+                # The DB already committed: never retry these rows or delete
+                # equal-valued, later samples. Reconcile by object identity.
+                identities = {id(row) for row in batch}
+                self.pending[:] = [row for row in self.pending if id(row) not in identities]
+                self.logger.error('保存回执前缀异常；已按批次身份核销，未重试已提交记录')
             self._inflight = None
             if self._flush_requested and self.pending:
                 self._submit_pending()
             else:
                 self._flush_requested = False
-        self.store.submit_intervals(batch, committed)
+        try:
+            self.store.submit_intervals(batch, committed)
+        except Exception:
+            self._inflight = None
+            raise
 
     def live_rows(self, now=None):
         now = self.clock() if now is None else now
-        return split_interval(self.app, self.start, now) if self.app else []
+        return self._rows(now, self.elapsed_clock())
 
     def snapshot(self):
         now = self.clock()

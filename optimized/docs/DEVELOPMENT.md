@@ -31,6 +31,8 @@ python stt_new.py
 | `qwen_control.py` | 后台管理队列、状态查询、独立强退与取消旧操作 |
 | `qwen_backend.py` | 兼容外部管理工具包、启动/加载/卸载、进程身份核验和强退 |
 | `qwen_status.py` | 指标白名单、阶段优先级、速度归零和文字对比度 |
+| `qwen_config.py` | 集中配置迁移、校验与共享配置合成 |
+| `process_identity.py` | 优先有限权限查询进程路径，失败后回退 |
 | `qwen_service.py` | Strata 接收层适配：网段准入、本机管理与请求/卸载竞争保护 |
 | `smoke_test.py` | 临时数据目录、模拟千问、真实 Tk 控件检查 |
 
@@ -69,10 +71,10 @@ python -m unittest test_regressions test_async_storage test_single_instance test
 ## 完整工具包与 Strata 模拟测试
 
 ```powershell
-python -m unittest test_regressions test_async_storage test_single_instance test_qwen test_qwen_force test_qwen_status -q
+python -m unittest test_regressions test_async_storage test_single_instance test_qwen test_qwen_force test_qwen_status test_reliability -q
 ```
 
-发布开发环境为 104 项。`test_qwen` 中的部分用例动态加载外部工具包，不具备工具包时不能把失败解释为普通 STT 无法使用。
+发布开发环境为 128 项。`test_qwen` 中的部分用例动态加载外部工具包，不具备工具包时不能把失败解释为普通 STT 无法使用。
 
 ```powershell
 python -m unittest test_qwen_service -q
@@ -95,9 +97,19 @@ python stt_new.py --smoke-test --fresh-config --fallback-font --smoke-output smo
 
 - 用明确文件清单构建发布包，不把整个开发目录压缩上传。
 - EXE 校验、ZIP 校验与发布附件校验分开记录。
-- 程序只改文档时保持 EXE 不变；本次文档更新不移动已发布源码标签。
+- 程序只改文档时保持 EXE 不变；每次代码修订发布新标签，不移动历史标签。
 - Release 中的独立源码 ZIP 和便携 ZIP 可更新随包文档；GitHub 自动生成的 tag 源码档案保留当时快照。最新文档以 `main` 为准。
 - 已有旧版 Release、标签和旧程序不因文档更新被删除或覆盖。
 - 测试参数、尺寸断言通过不等于视觉美观；不同 DPI、字体和多显示器仍需实际查看。
 
 未作为本次通过项：真实千问推理、真实任务中强退、其他电脑端到端访问和长期实机耐久验证。不要把模拟测试或短时容量测量写成这些项目已通过。
+
+## 统一打包发布附件
+
+先执行 optimized/build_exe.py 构建，再运行：
+
+```powershell
+python tools/package_release.py --version 2026.10.22.2 --exe optimized/dist/stt_new.exe --out E:/STT-release
+```
+
+只打包 Git 已跟踪的新版源码、默认配置与空工具包模板。输出独立 EXE、便携 ZIP、源码 ZIP 和 SHA256 清单；不读取个人 config 或数据库。参数只用于生成本地附件，不会自动上传 GitHub。发布新修订时更新文档版本并创建新标签，保留旧附件。

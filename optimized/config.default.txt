@@ -58,6 +58,27 @@ timer_duration_minutes = 25
 # 无效值使用120分钟并记录原因；STT退出后不再执行闲置管理。
 qwen_idle_timeout_minutes = 120
 
+# 千问连接与启动（路径参数下次启动服务生效）
+# qwen_enabled: 是否启用千问管理；true/false。false 不查询、不启动、不自动休眠，普通统计照常。
+qwen_enabled = true
+# qwen_prepare_service_on_start: STT 启动时是否准备接收服务；true/false。不主动加载模型。
+qwen_prepare_service_on_start = true
+# qwen_toolkit_path: 完整管理工具包目录，内含 scripts/manager.py 和 lifecycle.py；留空自动查找。示例 E:/AI/qwen-management。
+qwen_toolkit_path =
+# qwen_base_url: 本机服务地址，例 http://127.0.0.1:8765/v1；留空沿用工具包。不能填写远程 IP。
+qwen_base_url =
+# qwen_model_id: 服务公布的模型 ID，不一定等于模型文件夹名称；留空沿用工具包。
+qwen_model_id =
+# qwen_python_path: 模型环境的 python.exe 完整路径；例 E:/AI/Strata/.venv/Scripts/python.exe。留空沿用工具包。
+qwen_python_path =
+# qwen_working_directory: 模型服务工作目录，例 E:/AI/Strata；留空沿用工具包。
+qwen_working_directory =
+# qwen_launch_args: 启动参数，填 JSON 字符串数组，建议路径用 /；例 ["serve/server.py", "--port", "8765"]。
+# 必须复制已经验证可用的参数；模型路径通常也在其中。留空沿用，[] 表示明确清空参数。
+qwen_launch_args =
+# qwen_startup_timeout_seconds: 整个启动操作的总等待预算，单位秒，正整数；默认180。
+qwen_startup_timeout_seconds = 180
+
 # 进程配置（可选，不是白名单）
 # 没有配置的程序也会正常记录，默认在统计和时间流中都显示；通常显示进程文件名。
 # 只有需要改显示名称或隐藏某个程序时，才需要添加/修改对应条目。

@@ -3,6 +3,8 @@ import datetime as dt
 import sqlite3
 import queue
 import threading
+import time
+import logging
 
 
 class HistoryStore:
@@ -77,12 +79,15 @@ class AsyncHistoryStore:
     Failed jobs stay at the head of the worker queue and retry unchanged. A
     successful transaction is never retried because a UI callback failed.
     """
-    def __init__(self, directory, retry_seconds=2, factory=HistoryStore):
+    def __init__(self, directory, retry_seconds=2, factory=HistoryStore, logger=None):
         self.directory = directory
+        self.logger = logger or logging.getLogger(__name__)
         self.ready = False
         self.pending_writes = 0
         self.read_queries = 0
         self.version = 0
+        self.failure_since = None
+        self.last_error = ''
         self._cache = {}
         self._reading = set()
         self._jobs = queue.Queue()
@@ -129,8 +134,13 @@ class AsyncHistoryStore:
             except queue.Empty:
                 break
             if error is not None:
+                if self.failure_since is None:
+                    self.failure_since = time.monotonic()
+                self.last_error = str(error)
                 failures.append((kind, str(error)))
                 continue
+            self.failure_since = None
+            self.last_error = ''
             if kind == 'ready':
                 self.ready = True
             elif kind == 'read':
@@ -149,7 +159,11 @@ class AsyncHistoryStore:
                             totals[app] = totals.get(app, 0) + duration
                             history.append((stamp, app, duration))
                 if callback is not None:
-                    callback(result)
+                    try:
+                        callback(result)
+                    except Exception as error:
+                        self.logger.exception('数据库已提交，但保存回执处理异常；不重试已提交事务')
+                        failures.append(('acknowledgement', str(error)))
         return failures
 
     def _run(self):

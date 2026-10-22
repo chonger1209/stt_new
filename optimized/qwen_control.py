@@ -91,6 +91,8 @@ class QwenController:
         if isinstance(error, PermissionError) or type(error).__name__ == 'AccessDenied':
             return '权限不足，操作未完成；未确认服务已退出'
         if isinstance(error, ValueError):
+            if str(error).startswith(('qwen_', '千问配置')):
+                return str(error)
             return '无法核验千问服务身份或配置，未结束不明进程'
         return '操作未完成，请检查本地服务和全局千问配置'
 

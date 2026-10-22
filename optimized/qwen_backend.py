@@ -13,6 +13,7 @@ import urllib.request  # Required by the dynamically loaded toolkit in a frozen 
 
 import psutil  # Also makes the toolkit's process dependency available in the EXE.
 from qwen_status import metrics_display
+from qwen_config import effective_config, toolkit_scripts
 
 
 def idle_remaining(activity, reset_at, now, timeout=7200):
@@ -81,12 +82,43 @@ class ToolkitBackend:
         self._launch_gate = threading.Lock()
         self._context = threading.local()
         self._launched = None
+        self._settings = None
+        self.enabled = True
         self.set_idle_minutes(idle_minutes)
+
+    def configure(self, settings):
+        # Called on refresh: stage values only. Never change a live service here.
+        self._settings = dict(settings)
+        self.enabled = settings.get('qwen_enabled', True)
+        self.set_idle_minutes(settings['qwen_idle_timeout_minutes'])
+
+    def _desired(self, config):
+        return effective_config(self._settings, config) if self._settings is not None else config
+
+    def _activate_settings(self, manager, config):
+        desired = self._desired(config)
+        if desired == config:
+            return config
+        # Address/model/launch changes must not repoint management at a running
+        # process. Stop the old service explicitly, then start with the new config.
+        launch_changed = any(desired.get(key) != config.get(key) for key in ('base_url','model','launch'))
+        if launch_changed and manager.port_busy(config):
+            raise ValueError('千问配置已暂存：请先退出原服务，再点击启动服务使新路径/模型生效')
+        path = manager.ROOT / 'service.json'
+        backup = path.with_name('service.json.before-stt-config.bak')
+        if not backup.exists() and path.exists():
+            with backup.open('xb') as handle:
+                handle.write(path.read_bytes())
+        self._check_cancelled()
+        manager.atomic_json(path, desired)
+        return desired
 
     def execute(self, action, cancelled):
         self._context.cancelled = cancelled
         try:
             self._check_cancelled()
+            if not self.enabled and action != 'status':
+                return {'ok': False, 'message': 'qwen_enabled=false：千问管理已关闭'}
             return getattr(self, action)()
         finally:
             self._context.cancelled = None
@@ -107,7 +139,8 @@ class ToolkitBackend:
 
     def _load_locked(self):
         if self.manager is None:
-            self.scripts = Path(self.scripts) if self.scripts else find_toolkit()
+            requested = (self._settings or {}).get('qwen_toolkit_path', '')
+            self.scripts = toolkit_scripts(requested) if requested else (Path(self.scripts) if self.scripts else find_toolkit())
             manager = _module('_stt_qwen_manager', self.scripts / 'manager.py')
             # lifecycle imports manager by its original name. Bind it only during
             # import, then restore the application's module namespace.
@@ -124,9 +157,19 @@ class ToolkitBackend:
         return self.manager, self.lifecycle
 
     def status(self):
+        if not self.enabled:
+            return {'state': 'disabled', 'detail': 'qwen_enabled=false：千问管理已关闭，不查询或控制服务'}
         try:
             manager, lifecycle = self._load()
             config = manager.config()
+            try:
+                if self._settings and self._settings.get('qwen_toolkit_path'):
+                    toolkit_scripts(self._settings['qwen_toolkit_path'])
+                desired = self._desired(config)
+                path_changed = bool(self._settings and self._settings.get('qwen_toolkit_path') and toolkit_scripts(self._settings['qwen_toolkit_path']) != self.scripts)
+                notice = '\n配置有待生效的修改，请在任务结束后退出原服务，再点击启动服务。' if desired != config or path_changed else ''
+            except ValueError as error:
+                return {'state':'error', 'detail': str(error)}
             switches = manager.state()
             probe = manager.probe(config)
             base = {'model': config['model'], 'enabled': switches['enabled'],
@@ -134,7 +177,7 @@ class ToolkitBackend:
             if not probe.get('reachable'):
                 if manager.port_busy(config):
                     return dict(base, state='error', detail='本地端口有服务但无法核验身份，暂不提供启停')
-                return dict(base, state='off', detail='千问服务已停止')
+                return dict(base, state='off', detail='千问服务已停止' + notice)
             if probe.get('error') or probe.get('service') != 'strata':
                 return dict(base, state='error', detail='服务身份或模型不匹配，未执行任何启停')
             activity = lifecycle.service_activity(config)
@@ -169,12 +212,12 @@ class ToolkitBackend:
                         detail += '\n上下文进度：{} / {} token'.format(presentation['prompt_read'], presentation['prompt_total'])
                 else:
                     detail += '\n细分指标暂不可用，保留忙碌保护'
-                return dict(base, state='busy', detail=detail)
+                return dict(base, state='busy', detail=detail + notice)
             if not activity['loaded']:
-                return dict(base, state='unloaded', detail='模型已卸载，接收服务保留；本地或局域网请求可自动唤醒')
-            return dict(base, state='ready', detail='千问模型已就绪')
-        except FileNotFoundError:
-            return {'state': 'unconfigured', 'detail': '未找到用户级千问管理工具或服务配置'}
+                return dict(base, state='unloaded', detail='模型已卸载，接收服务保留；本地或局域网请求可自动唤醒' + notice)
+            return dict(base, state='ready', detail='千问模型已就绪' + notice)
+        except FileNotFoundError as error:
+            return {'state': 'unconfigured', 'detail': '未找到用户级千问管理工具或服务配置：' + str(error)}
         except urllib.error.HTTPError as error:
             return {'state': 'error', 'detail': f'本地服务查询失败（HTTP {error.code}）'}
         except Exception:
@@ -248,66 +291,133 @@ class ToolkitBackend:
         self._check_cancelled()
         manager, lifecycle = self._load()
         config = manager.config()
-        wait = min(300, max(1, float(config.get('startup_timeout_sec', 180))))
-        load_requested = False
+        # Configuration refresh itself never writes or starts anything.
+        if self._settings is not None:
+            requested = self._settings.get('qwen_toolkit_path', '')
+            if requested and toolkit_scripts(requested) != self.scripts:
+                if manager.port_busy(config):
+                    raise ValueError('千问配置已暂存：请先退出原服务，再切换管理工具包')
+                self.scripts = toolkit_scripts(requested)
+                self.manager = self.lifecycle = None
+                manager, lifecycle = self._load()
+                config = manager.config()
+        wait = max(1, float((self._settings or {}).get('qwen_startup_timeout_seconds', config.get('startup_timeout_sec',180))))
+        deadline = time.monotonic() + wait
+        def remaining():
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise TimeoutError('启动总等待预算已耗尽')
+            return value
+        # Scope budgets to this thread; a cancelled old start must never
+        # replace the HTTP function used by the independent force/status worker.
+        if getattr(manager, '_stt_budget_installed', False) is not True:
+            original_request = manager.request_json
+            def bounded_request(url, c, body=None, timeout=3):
+                limit = getattr(self._context, 'deadline', None)
+                if limit is None:
+                    return original_request(url, c, body, timeout=timeout)
+                self._check_cancelled()
+                left = limit - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError('启动总等待预算已耗尽')
+                # Socket timeouts alone restart on each read. Bound the caller
+                # even if a server slowly drips a response or stalls in JSON read.
+                done = threading.Event()
+                outcome = []
+                def perform():
+                    try:
+                        outcome.append((True, original_request(url, c, body, timeout=min(timeout,left))))
+                    except Exception as error:
+                        outcome.append((False,error))
+                    finally:
+                        done.set()
+                threading.Thread(target=perform, daemon=True, name='qwen-start-http').start()
+                while not done.is_set():
+                    self._check_cancelled()
+                    left = limit - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError('启动总等待预算已耗尽；服务端加载可能仍在继续')
+                    done.wait(min(.05,left))
+                success, result = outcome[0]
+                if not success:
+                    raise result
+                self._check_cancelled()
+                if time.monotonic() >= limit:
+                    raise TimeoutError('启动总等待预算已耗尽')
+                return result
+            manager.request_json = bounded_request
+            manager._stt_budget_installed = True
         # Explicit user action: keep enabled/auto_start untouched, including when false.
         with manager.lock('model-request', timeout=.3), manager.lock('startup', timeout=.3):
+            if not only_service:
+                config = self._activate_settings(manager, config)
+            self._context.deadline = deadline
+            try:
+                return self._start_with_budget(manager, lifecycle, config, only_service, deadline, remaining)
+            finally:
+                self._context.deadline = None
+
+    def _start_with_budget(self, manager, lifecycle, config, only_service, deadline, remaining):
+        wait = remaining()
+        load_requested = False
+        probe = manager.probe(config)
+        remaining()
+        self._check_cancelled()
+        if probe.get('reachable') and not probe.get('error'):
+            control = self._control(manager, config)
+            if control and control.get('exiting'):
+                manager.request_json(config['base_url'] + '/stt/cancel-exit', config,
+                                     {'model': config['model']})
+        if probe.get('ready') and probe.get('service') == 'strata':
+            return {'ok': True, 'message': '千问已经就绪'}
+        if probe.get('reachable'):
+            if probe.get('error') or probe.get('service') != 'strata':
+                return {'ok': False, 'message': '端口上的服务或模型不匹配，未启动第二份服务'}
+            if only_service:
+                return {'ok': True, 'message': '千问接收服务已运行，保留当前模型状态'}
+            self._check_cancelled()
+            manager.request_json(config['base_url'] + '/load', config,
+                                 {'model': config['model']}, timeout=wait)
+            load_requested = True
+        else:
+            if manager.port_busy(config):
+                return {'ok': False, 'message': '本地端口已占用，未启动第二份服务'}
+            launch = config['launch']
+            if not Path(launch['command']).is_file() or not Path(launch['cwd']).is_dir():
+                return {'ok': False, 'message': '全局千问配置中的启动程序或目录不存在'}
+            runtime = manager.ROOT / 'runtime'
+            runtime.mkdir(exist_ok=True)
+            flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
+            with (runtime / 'service.log').open('ab') as log:
+                with self._launch_gate:
+                    self._check_cancelled()
+                    remaining()
+                    process = launch_external([launch['command'], *launch['args']], cwd=launch['cwd'],
+                                               stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                               creationflags=flags, env=manager.service_environment(config))
+                    self._launched = lifecycle.identity(process.pid)
+            manager.atomic_json(runtime / 'last-launch.json',
+                                {'pid': process.pid, 'at': manager.now(), 'model': config['model']})
+        self._check_cancelled()
+        self._watchdog(config)
+        while time.monotonic() < deadline:
+            self._check_cancelled()
             probe = manager.probe(config)
+            remaining()
             self._check_cancelled()
-            if probe.get('reachable') and not probe.get('error'):
-                control = self._control(manager, config)
-                if control and control.get('exiting'):
-                    manager.request_json(config['base_url'] + '/stt/cancel-exit', config,
-                                         {'model': config['model']})
+            if (only_service and probe.get('reachable') and not probe.get('error')
+                    and probe.get('service') == 'strata'):
+                return {'ok': True, 'message': '千问接收服务已准备好，首次请求可加载模型'}
             if probe.get('ready') and probe.get('service') == 'strata':
-                return {'ok': True, 'message': '千问已经就绪'}
-            if probe.get('reachable'):
-                if probe.get('error') or probe.get('service') != 'strata':
-                    return {'ok': False, 'message': '端口上的服务或模型不匹配，未启动第二份服务'}
-                if only_service:
-                    return {'ok': True, 'message': '千问接收服务已运行，保留当前模型状态'}
-                self._check_cancelled()
-                manager.request_json(config['base_url'] + '/load', config,
-                                     {'model': config['model']}, timeout=wait)
+                return {'ok': True, 'message': '千问已启动并就绪'}
+            if (not only_service and not load_requested and probe.get('reachable')
+                    and not probe.get('error') and probe.get('service') == 'strata'
+                    and probe.get('loaded') is False):
                 load_requested = True
-            else:
-                if manager.port_busy(config):
-                    return {'ok': False, 'message': '本地端口已占用，未启动第二份服务'}
-                launch = config['launch']
-                if not Path(launch['command']).is_file() or not Path(launch['cwd']).is_dir():
-                    return {'ok': False, 'message': '全局千问配置中的启动程序或目录不存在'}
-                runtime = manager.ROOT / 'runtime'
-                runtime.mkdir(exist_ok=True)
-                flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
-                with (runtime / 'service.log').open('ab') as log:
-                    with self._launch_gate:
-                        self._check_cancelled()
-                        process = launch_external([launch['command'], *launch['args']], cwd=launch['cwd'],
-                                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                                   creationflags=flags, env=manager.service_environment(config))
-                        self._launched = lifecycle.identity(process.pid)
-                manager.atomic_json(runtime / 'last-launch.json',
-                                    {'pid': process.pid, 'at': manager.now(), 'model': config['model']})
-            self._check_cancelled()
-            self._watchdog(config)
-            deadline = time.monotonic() + wait
-            while time.monotonic() < deadline:
-                self._check_cancelled()
-                probe = manager.probe(config)
-                self._check_cancelled()
-                if (only_service and probe.get('reachable') and not probe.get('error')
-                        and probe.get('service') == 'strata'):
-                    return {'ok': True, 'message': '千问接收服务已准备好，首次请求可加载模型'}
-                if probe.get('ready') and probe.get('service') == 'strata':
-                    return {'ok': True, 'message': '千问已启动并就绪'}
-                if (not only_service and not load_requested and probe.get('reachable')
-                        and not probe.get('error') and probe.get('service') == 'strata'
-                        and probe.get('loaded') is False):
-                    load_requested = True
-                    manager.request_json(config['base_url'] + '/load', config,
-                                         {'model': config['model']}, timeout=wait)
-                time.sleep(.7)
-            return {'ok': False, 'message': '启动等待超时；服务可能仍在加载，请等待状态刷新'}
+                manager.request_json(config['base_url'] + '/load', config,
+                                     {'model': config['model']}, timeout=remaining())
+            time.sleep(min(.7, max(0, deadline-time.monotonic())))
+        return {'ok': False, 'message': '启动等待超时；服务可能仍在加载，请等待状态刷新'}
 
     def force_stop(self):
         """Explicit user abort: OS identities only, no HTTP or model locks."""

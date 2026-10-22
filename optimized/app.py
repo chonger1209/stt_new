@@ -1,6 +1,7 @@
 """Tkinter interface. Existing layout and controls are preserved."""
 import datetime
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import time
 import tkinter as tk
@@ -20,6 +21,8 @@ from tracking import Countdown, UsageTracker, timeline_blocks
 from qwen_backend import ToolkitBackend
 from qwen_control import QwenController
 from qwen_status import readable_color, rate_text
+from qwen_config import migrate_existing
+from process_identity import executable_name
 
 
 class CapsLockChecker:
@@ -43,13 +46,18 @@ class CapsLockChecker:
         self._stats_items = []
         self._logged_through = datetime.datetime.now().isoformat(sep=' ', timespec='microseconds')
         self.setup_logging()
+        if qwen_backend is None:
+            try:
+                migrate_existing(self.config_path)
+            except (OSError, ValueError, TypeError) as error:
+                self.logger.warning('千问配置迁移未完成，保留原文件：%s', error)
         self.config = read_settings(self.config_path, logger=self.logger)
         self._validate_colors()
         self.grid_second_per_block = self.config['grid_second_per_block']
         self.timer_total_seconds = self.config['timer_duration_minutes'] * 60
         self.countdown = Countdown(self.timer_total_seconds)
-        self.store = AsyncHistoryStore(self.directory)
-        self.tracker = UsageTracker(self.store)
+        self.store = AsyncHistoryStore(self.directory, logger=self.logger)
+        self.tracker = UsageTracker(self.store, logger=self.logger)
         self.last_hwnd = None
         self.color_caps_on = self.config['color_caps_on']
         self.color_caps_off = self.config['color_caps_off']
@@ -88,9 +96,12 @@ class CapsLockChecker:
         self.history_canvas.bind('<Configure>', self.on_history_canvas_configure)
         self.apply_config()
         self.start_scheduled_tasks()
-        self.qwen_controller = QwenController(
-            qwen_backend or ToolkitBackend(idle_minutes=self.config['qwen_idle_timeout_minutes']),
-            autostart=monitor)
+        backend = qwen_backend or ToolkitBackend(idle_minutes=self.config['qwen_idle_timeout_minutes'])
+        if hasattr(backend, 'configure'):
+            backend.configure(self.config)
+        self.qwen_controller = QwenController(backend,
+            autostart=monitor and self.config['qwen_enabled'] and self.config['qwen_prepare_service_on_start'])
+        self._storage_alerted = False
         self._schedule('qwen', 100, self.poll_qwen_events)
         self._schedule('storage', 100, self.poll_storage_events)
         self._schedule('initial', 100, self._finish_initialization)
@@ -102,7 +113,8 @@ class CapsLockChecker:
         self.logger = logging.getLogger(f'stt.{id(self)}')
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
-        self._log_handler = logging.FileHandler(folder / f'log_{datetime.date.today()}.txt', encoding='utf-8')
+        self._log_handler = RotatingFileHandler(folder / 'stt.log', maxBytes=2*1024*1024,
+                                               backupCount=5, encoding='utf-8')
         self._log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         self.logger.addHandler(self._log_handler)
 
@@ -165,6 +177,11 @@ class CapsLockChecker:
     def poll_storage_events(self):
         version = self.store.version
         failures = self.store.poll()
+        if self.store.failure_since is None:
+            self._storage_alerted = False
+        elif not self._storage_alerted and time.monotonic() - self.store.failure_since >= 60:
+            self._storage_alerted = True
+            self._show_storage_warning()
         if failures and time.monotonic() - self._last_storage_warning >= 5:
             self._last_storage_warning = time.monotonic()
             self.logger.error('后台保存暂未完成；保留数据并重试：%s', failures[-1])
@@ -185,6 +202,8 @@ class CapsLockChecker:
 
     def check_caps_lock(self):
         try:
+            if self.tracker.heartbeat():
+                self.last_hwnd = None
             current = bool(win32api.GetKeyState(win32con.VK_CAPITAL) & 1)
             if self.monitor:
                 hwnd = win32gui.GetForegroundWindow()
@@ -317,6 +336,9 @@ class CapsLockChecker:
     def apply_config(self):
         width, height = self.config['window_width'], self.config['window_height']
         x, y = self.config['window_x'], self.config['window_y']
+        # On Windows, changing topmost after a pending geometry request can
+        # restore the previous position. Apply attributes before the new position.
+        self.root.wm_attributes('-topmost', self.config['always_on_top'])
         self.original_height = height
         shown_height = height + 256 if self.stats_toggle_var.get() else height
         self.root.geometry(f'{width}x{shown_height}')
@@ -332,7 +354,6 @@ class CapsLockChecker:
         self.qwen_button.configure(bg=self.color_titlebar)
         self.qwen_exit_button.configure(bg=self.color_titlebar)
         self.update_main_frame_bg()
-        self.root.wm_attributes('-topmost', self.config['always_on_top'])
         self._history_key = self._stats_key = None
         self.render_history_stream()
         if self.stats_toggle_var.get():
@@ -341,8 +362,11 @@ class CapsLockChecker:
     def refresh_config(self):
         self.tracker.capture()
         self.config = read_settings(self.config_path, logger=self.logger)
-        if hasattr(self.qwen_controller.backend, 'set_idle_minutes'):
+        if hasattr(self.qwen_controller.backend, 'configure'):
+            self.qwen_controller.backend.configure(self.config)
+        elif hasattr(self.qwen_controller.backend, 'set_idle_minutes'):
             self.qwen_controller.backend.set_idle_minutes(self.config['qwen_idle_timeout_minutes'])
+        self.last_hwnd = None
         self.qwen_controller.request('status')
         self._validate_colors()
         self.grid_second_per_block = self.config['grid_second_per_block']
@@ -365,10 +389,13 @@ class CapsLockChecker:
         families = {name.casefold(): name for name in tkfont.families(self.root)}
         family = next((families[name.casefold()] for name in ('MiSans', '等线', 'DengXian')
                        if name.casefold() in families), 'TkDefaultFont')
-        self.qwen_status_font = tkfont.Font(root=self.root, family=family, size=11, weight='normal')
+        self.qwen_status_font = tkfont.Font(root=self.root, family=family, size=12, weight='normal')
         button_family = next((families[name.casefold()] for name in ('等线', 'DengXian')
                               if name.casefold() in families), family)
         self.qwen_control_font = tkfont.Font(root=self.root, family=button_family, size=9, weight='normal')
+        speed_family = families.get('misans') or button_family
+        self.qwen_speed_font = tkfont.Font(root=self.root, family=speed_family, size=11,
+                                          weight='normal')
         button_width = math.ceil(max(self.qwen_control_font.measure(text)
                                     for text in ('休眠服务', '启动服务', '强制退出'))
                                  / max(1, self.qwen_control_font.measure('0')))
@@ -387,10 +414,10 @@ class CapsLockChecker:
                                    fg='#333333', bg=self.main_frame['bg'])
         self.qwen_label.grid(row=0, column=1, pady=(0, 1), padx=4)
         self.qwen_speed_label = tk.Label(self.timer_frame, text='— T/s', width=12,
-                                         font=self.qwen_control_font, anchor='center',
+                                         font=self.qwen_speed_font, anchor='center',
                                          bg=self.main_frame['bg'], fg='#333333')
-        self.qwen_speed_label.grid(row=1, column=1, pady=(3, 6))
-        self.timer_frame.grid_rowconfigure(1, minsize=self.qwen_control_font.metrics('linespace') + 9)
+        self.qwen_speed_label.grid(row=1, column=1, pady=(4, 7))
+        self.timer_frame.grid_rowconfigure(1, minsize=self.qwen_speed_font.metrics('linespace') + 11)
         for widget in (self.qwen_label, self.qwen_speed_label, self.qwen_button, self.qwen_exit_button):
             widget.bind('<Enter>', self.show_qwen_details)
             widget.bind('<Leave>', self.hide_tooltip)
@@ -426,6 +453,7 @@ class CapsLockChecker:
                   'busy': ('工作', '#663c00', '休眠服务'),
                   'error': ('异常', '#7f1d1d', '启动服务'),
                   'unconfigured': ('未配置', '#333333', '启动服务')}
+        labels['disabled'] = ('未启用', '#64748b', '启动服务')
         state = self._qwen_status.get('state', 'error')
         name, color, button = labels.get(state, labels['error'])
         phase = 'idle' if state == 'ready' else state
@@ -438,7 +466,7 @@ class CapsLockChecker:
             name = {'start': '启动中', 'stop': '退出中', 'force_stop': '退出中', 'unload': '休眠中',
                     'ensure_service': '准备中', 'reset_idle': '延时中'}[operation]
             phase = 'loading'
-        enabled = not operation and state not in ('checking', 'busy', 'unconfigured')
+        enabled = not operation and state not in ('checking', 'busy', 'unconfigured', 'disabled')
         background = self.main_frame.cget('bg')
         color_key = (phase, background)
         if color_key not in self._qwen_color_cache:
@@ -451,10 +479,13 @@ class CapsLockChecker:
         if key != self._qwen_paint_key:
             self._qwen_paint_key = key
             self.qwen_label.configure(text='· 千问' + name, fg=color)
-            self.qwen_speed_label.configure(text=rate, fg=color)
+            rgb = tuple(value/65535 for value in self.root.winfo_rgb(background))
+            from qwen_status import contrast_ratio
+            speed_color = '#000000' if contrast_ratio((0,0,0),rgb) >= contrast_ratio((1,1,1),rgb) else '#ffffff'
+            self.qwen_speed_label.configure(text=rate, fg=speed_color)
             self.qwen_button.configure(text=button, state=tk.NORMAL if enabled else tk.DISABLED)
             self.qwen_exit_button.configure(text=confirm,
-                state=tk.DISABLED if operation == 'force_stop' else tk.NORMAL)
+                state=tk.DISABLED if operation == 'force_stop' or state == 'disabled' else tk.NORMAL)
             self.right_click_menu.entryconfigure(self._qwen_start_menu,
                 state=tk.NORMAL if not operation and state in ('off', 'unloaded', 'ready') else tk.DISABLED)
             self.right_click_menu.entryconfigure(self._qwen_stop_menu,
@@ -645,6 +676,13 @@ class CapsLockChecker:
 
             tid, pid = win32process.GetWindowThreadProcessId(hwnd)
 
+            process_name = executable_name(pid)
+            if process_name:
+                for proc_name, config in self.config.get('process_config', {}).items():
+                    if process_name.lower() == proc_name.lower():
+                        return config['display_name']
+                return process_name
+
             hproc = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid)
             if hproc and hproc != 0:  # 检查句柄有效性
                 try:
@@ -680,6 +718,15 @@ class CapsLockChecker:
             except:
                 pass
             return "Unknown"
+
+    def _show_storage_warning(self):
+        window = tk.Toplevel(self.root)
+        window.title('STT 保存尚未完成')
+        window.attributes('-topmost', True)
+        tk.Label(window, text='数据保存已连续失败超过一分钟。\n未保存记录仍保留在内存中，正在自动重试。\n请检查磁盘空间和目录权限，暂时不要强制结束 STT。',
+                 padx=18, pady=14, justify='left').pack()
+        tk.Button(window, text='打开数据目录', command=lambda: os.startfile(str(self.directory))).pack(pady=4)
+        tk.Button(window, text='继续等待', command=window.destroy).pack(pady=8)
 
     def format_duration(self, seconds):
         """格式化时长"""

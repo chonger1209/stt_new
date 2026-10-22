@@ -3,6 +3,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from qwen_config import FIELDS
 
 DEFAULTS = {
     'color_caps_on': '#fa6666', 'color_caps_off': '#4CAF50', 'color_titlebar': '#2c3e50',
@@ -12,8 +13,10 @@ DEFAULTS = {
     'timer_duration_minutes': 25,
     'qwen_idle_timeout_minutes': 120,
 }
+DEFAULTS.update({key: value for key, (value, _) in FIELDS.items()})
 POSITIVE = {'window_width', 'window_height', 'grid_second_per_block',
             'screen_time_refresh_frequency', 'timer_duration_minutes', 'qwen_idle_timeout_minutes'}
+POSITIVE.add('qwen_startup_timeout_seconds')
 
 CONFIG_MARKER = '# 配置说明版本: 2'
 HEADER = '''# Caps Lock 检测器配置文件
@@ -35,6 +38,7 @@ GROUPS = {
     '时间流与统计刷新': ['grid_second_per_block', 'screen_time_refresh_frequency'],
     '番茄倒计时': ['timer_duration_minutes'],
     '千问休眠设置': ['qwen_idle_timeout_minutes'],
+    '千问连接与启动（路径参数下次启动服务生效）': list(FIELDS),
 }
 HELP = {
     'qwen_idle_timeout_minutes': ('连续闲置后卸载模型的时间，单位分钟，正整数；默认 120（2小时）。\n'
@@ -62,6 +66,14 @@ HELP = {
     'timer_duration_minutes': ('番茄倒计时时长，单位分钟，正整数；默认 25。\n'
                                '# 修改后点击“刷新”：尚未开始时立即更新；正在运行或暂停时保留剩余时间，重置后用新时长。'),
 }
+HELP.update({key: help_text for key, (_, help_text) in FIELDS.items()})
+
+
+def parse_bool(value):
+    normalized = value.lower()
+    if normalized not in {'true', '1', 'yes', 'on', 'false', '0', 'no', 'off'}:
+        raise ValueError('布尔值必须为 true/false')
+    return normalized in {'true', '1', 'yes', 'on'}
 
 PROCESS_HELP = '''# 进程配置（可选，不是白名单）
 # 没有配置的程序也会正常记录，默认在统计和时间流中都显示；通常显示进程文件名。
@@ -173,11 +185,13 @@ def ensure_documented_config(path):
             if line.strip().startswith('['):
                 break
             prefix.append(line)
-        if not any(line.split('=', 1)[0].strip() == 'qwen_idle_timeout_minutes'
-                   for line in prefix if '=' in line and not line.lstrip().startswith('#')):
+        keys = {line.split('=', 1)[0].strip() for line in prefix if '=' in line and not line.lstrip().startswith('#')}
+        missing = [key for key in ['qwen_idle_timeout_minutes', *FIELDS] if key not in keys]
+        if missing:
             lines = text.splitlines(keepends=True)
             index = next((i for i, line in enumerate(lines) if line.lstrip().startswith('[')), len(lines))
-            addition = '\n# 千问休眠设置\n# qwen_idle_timeout_minutes: ' + HELP['qwen_idle_timeout_minutes'] + '\nqwen_idle_timeout_minutes = 120\n\n'
+            addition = '\n# 千问管理设置（新增字段；保留原有配置）\n' + '\n\n'.join(
+                f'# {key}: {HELP[key]}\n{key} = {encode(DEFAULTS[key])}' for key in missing) + '\n\n'
             lines.insert(index, addition)
             _atomic_write(path, ''.join(lines))
         return
@@ -211,11 +225,11 @@ def read_settings(path, logger=None):
                     if key == 'display_name':
                         target[key] = value
                     elif key in {'show_in_screen_time', 'show_in_time_stream'}:
-                        target[key] = value.lower() in {'true', '1', 'yes', 'on'}
+                        target[key] = parse_bool(value)
                 elif key in DEFAULTS:
                     default = DEFAULTS[key]
                     if isinstance(default, bool):
-                        parsed = value.lower() in {'true', '1', 'yes', 'on'}
+                        parsed = parse_bool(value)
                     elif isinstance(default, int):
                         parsed = int(value)
                         if key in POSITIVE and parsed <= 0:
@@ -226,9 +240,10 @@ def read_settings(path, logger=None):
                         parsed = value
                     target[key] = parsed
             except ValueError as error:
-                target[key] = DEFAULTS[key]
+                fallback = DEFAULTS.get(key, True)
+                target[key] = fallback
                 (logger or logging.getLogger(__name__)).warning(
-                    '无效配置 %s=%s（%s），使用默认值 %s', key, value, error, DEFAULTS[key])
+                    '无效配置 %s=%s（%s），使用默认值 %s', key, value, error, fallback)
     return config
 
 
@@ -261,6 +276,4 @@ def save_position(path, x, y):
         else:
             output.append(line.rstrip('\r\n') + newline)
     output.extend(f'{key} = {value}{newline}' for key, value in pending.items())
-    temporary = path.with_suffix('.txt.tmp')
-    temporary.write_bytes(''.join(output).encode('utf-8'))
-    os.replace(temporary, path)
+    _atomic_write(path, ''.join(output))

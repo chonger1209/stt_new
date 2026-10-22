@@ -74,7 +74,7 @@ def run():
         simulated_qwen = SimulatedQwen()
         families = tk.font.families(root)
         if '--fallback-font' in sys.argv:
-            families = tuple(f for f in families if f.casefold() != 'misans')
+            families = tuple(f for f in families if not f.casefold().startswith('misans'))
         with patch('app.tkfont.families', return_value=families):
             app = CapsLockChecker(root, data, monitor=False, qwen_backend=simulated_qwen)
 
@@ -86,6 +86,14 @@ def run():
                     return
                 time.sleep(.01)
             raise AssertionError('Timed out waiting for Qwen UI')
+
+        def refresh_status():
+            # A status request is pending work even though operation is None.
+            # Wait for its UI acknowledgement before changing the next fixture.
+            pump_until(lambda: app.qwen_controller._pending is None)
+            assert app.qwen_controller.request('status')
+            pump_until(lambda: app.qwen_controller._pending is None
+                       and app.qwen_controller._latest_status is None)
         try:
             # A withdrawn, centered window can leave child geometry at 1x1.
             # Map it transparently so the real layout is exercised without showing it.
@@ -117,7 +125,7 @@ def run():
             pump_until(lambda: '已停止' in app.qwen_label.cget('text'))
             assert simulated_qwen.stops == 1
             simulated_qwen.state = 'busy'
-            app.qwen_action('status')
+            refresh_status()
             pump_until(lambda: '千问工作' in app.qwen_label.cget('text'))
             assert str(app.qwen_button.cget('state')) == 'disabled'
             assert str(app.qwen_exit_button.cget('state')) == 'normal'
@@ -127,7 +135,7 @@ def run():
             app.qwen_exit_button.invoke()
             pump_until(lambda: simulated_qwen.stops == 2 and app.qwen_controller.operation is None)
             simulated_qwen.state = 'off'
-            app.qwen_action('status')
+            refresh_status()
             pump_until(lambda: '已停止' in app.qwen_label.cget('text'))
             result['qwen_controls'] = 'passed (sleep/start, forced busy exit, responsive UI)'
             assert app.qwen_exit_button.cget('text') == '强制退出'
@@ -140,7 +148,7 @@ def run():
             assert app.qwen_exit_button.cget('text') == '强制退出'
             assert app.qwen_label.cget('text').startswith('· ')
             result['force_confirmation'] = 'passed (first click arms, second confirms, expiry re-arms)'
-            assert app.qwen_status_font.cget('size') == 11
+            assert app.qwen_status_font.cget('size') == 12
             assert app.qwen_status_font.cget('weight') == 'normal'
             assert app.qwen_control_font.cget('size') == 9
             assert app.qwen_control_font.cget('weight') == 'normal'
@@ -172,7 +180,12 @@ def run():
             assert app.qwen_label.winfo_width() > 1
             assert app.qwen_speed_label.winfo_y() >= app.qwen_label.winfo_y() + app.qwen_label.winfo_height()
             assert app.qwen_speed_label.winfo_y() + app.qwen_speed_label.winfo_height() <= app.qwen_buttons.winfo_y()
-            assert app.qwen_speed_label.cget('font') == str(app.qwen_control_font)
+            assert app.qwen_speed_label.cget('font') == str(app.qwen_speed_font)
+            assert app.qwen_speed_font.actual('size') == 11
+            assert app.qwen_speed_font.actual('weight') == 'normal'
+            assert app.qwen_status_font.actual('size') == 12
+            assert app.qwen_status_font.actual('weight') == 'normal'
+            result['qwen_speed_font'] = app.qwen_speed_font.actual()
             positions = None
             simulated_qwen.state = 'busy'
             for phase, name, speed, expected in (
@@ -185,7 +198,7 @@ def run():
                 simulated_qwen.presentation = {'display_phase': phase, 'generation_tps': speed,
                                                'metrics_available': True}
                 pump_until(lambda: app.qwen_controller._pending is None)
-                app.qwen_action('status')
+                refresh_status()
                 pump_until(lambda: name in app.qwen_label.cget('text') and app.qwen_speed_label.cget('text') == expected)
                 assert str(app.qwen_button.cget('state')) == 'disabled'
                 geometry = tuple((w.winfo_x(), w.winfo_y(), w.winfo_width(), w.winfo_height())
@@ -200,7 +213,7 @@ def run():
             result['qwen_stage_and_speed'] = 'passed (reading/generating/queued/loading, zero/unknown, fixed geometry, both backgrounds)'
             simulated_qwen.state = 'ready'
             simulated_qwen.remaining = 60
-            app.qwen_action('status')
+            refresh_status()
             pump_until(lambda: getattr(app, '_qwen_reminder', None) is not None)
             reminder = app._qwen_reminder
             assert app._qwen_reminder_button.cget('text') == '重置 2 小时'
@@ -215,17 +228,17 @@ def run():
                 'qwen_idle_timeout_minutes = 120', 'qwen_idle_timeout_minutes = 7'), encoding='utf-8')
             app.refresh_config()
             assert simulated_qwen.minutes == 7
-            pump_until(lambda: app.qwen_controller.operation is None)
+            pump_until(lambda: app.qwen_controller._pending is None and app.qwen_controller._latest_status is None)
             simulated_qwen.remaining = 30
-            app.qwen_action('status')
+            refresh_status()
             pump_until(lambda: app._qwen_reminder is not None)
             assert app._qwen_reminder_button.cget('text') == '重置 7 分钟'
             simulated_qwen.state = 'busy'
-            app.qwen_action('status')
+            refresh_status()
             pump_until(lambda: app._qwen_reminder is None)
             simulated_qwen.state = 'off'
             simulated_qwen.remaining = None
-            app.qwen_action('status')
+            refresh_status()
             pump_until(lambda: app._qwen_status['state'] == 'off')
             result['qwen_idle_reminder'] = 'passed (2h reset, live 7min config refresh, hide on new work)'
             text_config = (data / 'config.txt').read_text(encoding='utf-8')
@@ -241,6 +254,7 @@ def run():
             assert app.timer_total_seconds == app.config['timer_duration_minutes'] * 60
             app.tracker.switch('Smoke App')
             app.tracker.start -= app.grid_second_per_block + 0.25
+            app.tracker._start_elapsed -= app.grid_second_per_block + 0.25
             app.tracker.capture()
             app.render_history_stream()
             app.show_stats_window()
@@ -299,7 +313,17 @@ def run():
             assert abs(app.countdown.remaining - remaining) <= 1
             app.reset_timer()
             assert app.countdown.remaining == app.timer_total_seconds
+            original_position = (app.config['window_x'], app.config['window_y'])
+            app.config['window_x'], app.config['window_y'] = -321, -123
+            app.apply_config()
+            pump_until(lambda: (root.winfo_x(),root.winfo_y()) == (-321,-123))
+            app.config['window_x'], app.config['window_y'] = original_position
+            app.apply_config()
+            result['negative_monitor_coordinates'] = 'passed (-321,-123 absolute position)'
+            app.last_hwnd = 999
             app.refresh_config()
+            assert app.last_hwnd is None
+            result['refresh_reidentifies_foreground'] = 'passed'
             # Exercise Caps Lock rules without changing the real keyboard state.
             app.monitor = True
             app.last_hwnd = None
@@ -326,11 +350,21 @@ def run():
             result['caps_lock_rules'] = 'passed (mocked keyboard events)'
             assert not errors, errors
             pump_until(lambda: app.store.ready and app.store.pending_writes == 0)
+            with patch.object(app, '_show_storage_warning') as warning:
+                app.store.failure_since = time.monotonic()-61
+                app.poll_storage_events()
+                app.poll_storage_events()
+                warning.assert_called_once()
+                app.store.failure_since = None
+                app.poll_storage_events()
+                assert not app._storage_alerted
+            result['persistent_storage_warning'] = 'passed (one notice per continuous failure, reset on recovery)'
             blocker = sqlite3.connect(str(data / 'screen_time_history.db'))
             blocker.execute('BEGIN IMMEDIATE')
             try:
                 heartbeat = []
                 app.tracker.start -= 1
+                app.tracker._start_elapsed -= 1
                 app.close_application()
                 root.after(30, lambda: heartbeat.append(True))
                 pump_until(lambda: bool(heartbeat))

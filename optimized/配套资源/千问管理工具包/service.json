@@ -1,0 +1,18 @@
+{
+  "base_url": "http://127.0.0.1:8765/v1",
+  "model": "",
+  "api_key_required": false,
+  "stt_control": true,
+  "startup_timeout_sec": 180,
+  "launch": {
+    "command": "",
+    "cwd": "",
+    "args": []
+  },
+  "lifecycle": {
+    "enabled": false,
+    "owner": "stt",
+    "shutdown_mode": "unload",
+    "unload_on_codex_exit": false
+  }
+}
