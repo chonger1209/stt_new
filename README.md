@@ -1,70 +1,64 @@
-# STT：旧版与优化版并存
+# STT · 屏幕时间与 Caps Lock 助手
 
-| 版本 | 下载 | 源码 |
-|---|---|---|
-| 2026.10.22 优化试用版 | [新版发布页](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.22) | [optimized/](optimized/) |
-| 旧版 2.0 | [旧版发布页](https://github.com/chonger1209/stt_new/releases/tag/stt_new) | 根目录 stt_new.py、dist/stt_new.exe |
+一个常驻桌面的 Windows 悬浮工具：查看 Caps Lock 状态、按软件自动切换大小写、统计当天前台应用时长，用彩色格子回看使用顺序，并提供番茄倒计时。新版还提供**可选的本地千问服务管理**。
 
-新版增加后台数据库读写、单实例保护、时间流累计修复与可选千问管理。旧版下载、标签和入口文件保留。升级请保留自己的配置和历史数据库，详情见 [新版说明](optimized/README.md)。
+**旧版与新版同时保留。** 仓库根目录的 `stt_new.py`、`dist/stt_new.exe` 是旧版；新版源码独立位于 [`optimized/`](optimized/)。
 
----
+## 选择版本与下载
 
-# Screen Time Tracker / 屏幕时间追踪器
+| 版本 | 适合谁 | 下载 | 源码和说明 |
+|---|---|---|---|
+| **2026.10.22 优化试用版** | 使用后台保存、修正后的时间流、完整中文配置和可选千问管理 | [新版发布页](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.22) | [完整使用手册](optimized/README.md) · [源码](optimized/) |
+| **旧版 2.0** | 继续使用原有版本或需要回退 | [旧版发布页](https://github.com/chonger1209/stt_new/releases/tag/stt_new) | [旧版说明](docs/LEGACY.md) · [原入口](stt_new.py) |
 
-## English
+新版标记为 **Pre-release / 试用版**；旧版仍保留为稳定 Release。发布记录、旧标签和原下载附件均保留。
 
-A lightweight Windows application that monitors Caps Lock status and tracks screen time usage with a visual timeline.
+## STT 能做什么
 
-### Features
-- **Caps Lock Status Display**: Real-time monitoring of Caps Lock state with color-coded indicators (Red for ON, Green for OFF)
-- **Countdown Timer**: Built-in 25-minute countdown timer (configurable) with start/pause/reset controls
-- **Screen Time Tracking**: Automatically tracks time spent on different applications
-- **Visual Timeline**: Displays usage history as colored pixel blocks
-- **Statistics Panel**: Shows usage statistics with horizontal bar charts
-- **Always on Top**: Window stays visible above other applications
-- **Borderless Design**: Clean, modern interface with auto-hide title bar
+| 功能 | 使用方式 |
+|---|---|
+| Caps Lock 状态 | 显示 ON/OFF，默认开启红色、关闭绿色 |
+| 自动大小写切换 | 切换前台窗口时匹配软件名称或窗口标题，命中列表开启大写，未命中关闭 |
+| 前台应用计时 | 记录前台窗口对应应用的使用时长，统计面板按当天累计时长排序 |
+| 彩色时间流 | 按累计秒数生成色块，悬停查看应用名称，回看当天使用顺序 |
+| 番茄倒计时 | 默认 25 分钟，可开始、暂停、继续、重置，时长可配置 |
+| 桌面悬浮窗 | 置顶、拖动、隐藏标题栏、调整窗口尺寸、右键快捷菜单 |
+| 本地保存 | 中文配置；程序旁保存两份 SQLite 数据库和运行日志 |
+| 可选千问管理 | 查询状态、启动/加载、卸载休眠、强退二次确认、闲置休眠与提前提醒 |
 
-### Usage
-1. Run `stt_new.exe`
-2. The window will appear in the center of the screen
-3. Move mouse to the top to show the title bar
-4. Right-click for settings menu
-5. Click the stats button (📊) to view usage statistics
+普通统计功能**不需要千问、Strata、Codex 或 Python 环境**。下载 EXE 即可使用。千问功能依赖另外配置的兼容工具包与模型环境，未配置时显示“千问未配置”。
 
-### Configuration
-Edit `config.txt` to customize:
-- `color_caps_on`: Color when Caps Lock is ON (default: #fa6666)
-- `color_caps_off`: Color when Caps Lock is OFF (default: #4CAF50)
-- `timer_duration_minutes`: Countdown duration in minutes (default: 25)
-- `window_width` / `window_height`: Window size
-- `always_on_top`: Keep window on top (true/false)
+## 第一次使用新版
 
----
+1. 下载发布页的 `STT-2026.10.22-windows-x64-portable.zip`。
+2. 完整解压到当前用户可写的目录，运行 `stt_new.exe`，不要在 ZIP 内直接运行。
+3. 移入窗口或靠近上沿显示标题栏；点 `📊` 查看统计，点 `⚙` 打开配置，保存后点 `⟳` 刷新。
+4. 右键可以打开设置、刷新、统计和关闭。`Esc` 是正常退出 STT，不是隐藏到托盘。
 
-## 中文
+也提供单独 EXE。配置不存在时会自动创建中文 `config.txt`；数据库和日志目录也会自动创建。
 
-一款轻量级Windows应用程序，用于监控Caps Lock状态并以可视化时间线追踪屏幕使用时间。
+## 新版相对旧版的主要变化
 
-### 功能特性
-- **Caps Lock状态显示**: 实时监控Caps Lock状态，使用颜色编码指示器（红色表示开启，绿色表示关闭）
-- **倒计时器**: 内置25分钟倒计时器（可配置），带有开始/暂停/重置控制
-- **屏幕时间追踪**: 自动追踪在不同应用程序上花费的时间
-- **可视化时间线**: 以彩色像素块显示使用历史
-- **统计面板**: 以水平条形图显示使用统计
-- **始终置顶**: 窗口保持在其他应用程序上方可见
-- **无边框设计**: 简洁现代的界面，标题栏自动隐藏
+- 数据库读写移到后台；失败保留原批次重试，成功后才移除待写记录，退出等待保存结果。
+- 同一数据目录增加单实例保护，减少重复运行造成的重复统计。
+- 修正时间流累计：60 秒/格时，1 小时有效可见使用时长对应 60 格，切换应用不会额外增加格子。
+- 倒计时使用单调时钟，暂停继续保留剩余时长；配置刷新保留进行中的倒计时。
+- 完整中文配置注释、旧配置升级、进程显示与隐藏规则说明。
+- 可选千问状态、休眠/启动、5 秒内二次确认的强制退出、默认 2 小时闲置休眠及提前 1 分钟提醒。
 
-### 使用方法
-1. 运行 `stt_new.exe`
-2. 窗口将出现在屏幕中央
-3. 将鼠标移到顶部以显示标题栏
-4. 右键点击打开设置菜单
-5. 点击统计按钮 (📊) 查看使用统计
+完整变化见 [更新日志](CHANGELOG.md)。以上新版行为不表示旧版也具有。
 
-### 配置说明
-编辑 `config.txt` 进行自定义：
-- `color_caps_on`: Caps Lock开启时的颜色（默认：#fa6666）
-- `color_caps_off`: Caps Lock关闭时的颜色（默认：#4CAF50）
-- `timer_duration_minutes`: 倒计时时长（分钟，默认：25）
-- `window_width` / `window_height`: 窗口大小
-- `always_on_top`: 保持窗口置顶（true/false）
+## 升级与文档
+
+升级前正常退出并备份整个旧目录。保留自己的 `config.txt`、`screen_time_history.db`、`time_stream_history.db`；不要用压缩包里的默认配置覆盖原设置，不要同时运行新旧版。
+
+| 文档 | 内容 |
+|---|---|
+| [新版完整使用手册](optimized/README.md) | 完整功能、操作、文件、升级与能力边界 |
+| [配置手册](optimized/docs/CONFIGURATION.md) | 13 项全局配置、进程规则、示例与生效方式 |
+| [千问管理说明](optimized/docs/QWEN.md) | 依赖、状态、按钮、休眠、提醒与远程唤醒条件 |
+| [常见问题](optimized/docs/FAQ.md) | 格子、内存、启动、保存、配置和恢复 |
+| [开发与测试](optimized/docs/DEVELOPMENT.md) | 模块结构、源码运行、构建和测试依赖 |
+| [旧版说明](docs/LEGACY.md) | 旧版下载、基本操作与版本区别 |
+
+发布包不含个人使用记录、个人服务配置、密钥或模型权重。程序首次运行会创建本地数据，请保管好自己的备份。

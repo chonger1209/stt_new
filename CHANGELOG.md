@@ -1,85 +1,72 @@
-# Changelog / 更新日志
+# 更新日志
 
-## 2026.10.22 优化试用版
+本文件区分程序变更和文档修订。新版源码在 `optimized/`；旧版源码、EXE、Release 和标签保留。
 
-- 新版源码独立存放 optimized/，旧入口、旧 EXE 和旧 Release 保留。
-- 数据库后台读写，失败保留批次重试，退出等待保存；同一数据目录增加单实例保护。
-- 时间流按累计秒数绘格，修复切换应用额外产生格子；倒计时使用单调时钟。
-- 完善中文配置与既有设置保留，可选千问管理增加休眠、启动和强退二次确认。
-- 发布包仅包含程序、图标、默认配置、说明与服务适配器，不包含个人数据库、日志、密钥或模型。
-- 90 项逻辑测试与 8 项模拟接口测试通过，真实模型和跨设备验证仍待进行。
+## 文档修订 · 2026-10-22
 
+本次只改文档与随包说明，**不改变已发布 EXE、模型参数、用户配置或数据库**。
 
-## Version 2026.03.12
+- 重写仓库首页，提供新旧版本下载、功能概览和文档导航。
+- 重写新版 README：完整说明 Caps Lock、自动大小写、前台统计、格子累计、倒计时、窗口/菜单、文件、保存和升级。
+- 新增完整配置手册、千问接入与操作说明、常见问题、开发/测试说明、旧版手册。
+- 讲清 5 秒内二次确认强退、闲置两小时卸载、提前一分钟提醒与远程唤醒条件。
+- 说明千问工具包和模型不随 STT 分发；未配置时普通功能照常可用。
+- 说明真实验证范围与当前能力边界，避免把未实现的功能或模拟测试写成已经支持。
+- 同步 Release 正文、便携 ZIP、独立源码 ZIP 和校验文件。源码标签保留原快照，最新手册见 `main`。
 
-### English
+## 2026.10.22 优化试用版 · `v2026.10.22`
 
-#### UI Layout Optimization
-- **Caps Lock Display**:
-  - Reduced font size from 12px to 10px
-  - Reduced top padding from 30 to 10
-  - Reduced spacing between "Caps Lock" and "ON/OFF" from 2 to 1
+### 统计与时间流
 
-- **Countdown Timer**:
-  - Reduced font size from 32px to 24px
-  - Reduced top padding to move timer higher
-  - Reduced spacing between timer and buttons
-  - Reduced bottom padding of button container
+- 应用切换时结算上一段，合并已存区间、待写区间和实时尾段。
+- 跨本地午夜拆分区间，保留原两份数据库结构。
+- 短片段共同累计，满设定秒数才绘格，余数保留，颜色取格子结束时应用。
+- 采样、刷盘、重启和窗口切换不单独额外生成格子。
+- 使用索引、缓存和控件复用，减少重复查询、重画与事件绑定积累。
 
-- **Button Optimization**:
-  - Reduced font size from 10px to 9px
-  - Adjusted button padding to ensure square shape
-  - Reduced spacing between buttons from 3 to 2
+### 保存与实例
 
-#### Space Allocation Optimization
-- Reduced overall height to provide more space for the timeline
-- More compact layout with better visual aesthetics
+- SQLite 连接由数据库线程独占，UI 使用缓存和有序提交回执。
+- 两份数据库在共同事务中写入，成功后才清除已提交待写前缀。
+- 失败批次保留并重试；正常退出补记尾段并等待保存，失败提示后保持运行。
+- 同一规范化数据目录增加 Windows 单实例互斥；进程异常结束后不留失效锁文件。
 
-#### Bug Fixes
-- Fixed countdown position being too low
-- Fixed inconsistent button sizes and shapes
-- Fixed unreasonable overall layout space allocation
+### 配置与倒计时
 
----
+- 完整中文配置模板，老配置保值升级、缺项补齐和格式备份。
+- 进程显示规则可选；未配置应用默认记录，两个视图的隐藏开关独立。
+- 正常退出只保存窗口坐标，不重置其他用户字段。
+- 倒计时采用单调时钟，暂停/继续保留剩余，刷新配置不覆盖进行中的会话。
 
-### 中文
+### 可选千问管理
 
-#### 界面布局优化
-- **CAPS lock显示**：
-  - 字体大小从12px减小到10px
-  - 顶部间距从30减小到10
-  - "Caps Lock"和"ON/OFF"之间的间距从2减小到1
+- 后台状态查询和启动准备，已有服务复用，已卸载模型保持待唤醒。
+- 可见“休眠服务 / 启动服务”及“强制退出”按钮。
+- 强退第一次点击进入确认，5 秒内再次点击才结束服务与任务，超时恢复。
+- 独立强退通道、进程身份核验、取消旧启动操作，普通休眠继续保留忙碌保护。
+- 默认闲置 120 分钟卸载模型、保留接收服务；前 1 分钟提醒，重置时长/文案跟随配置。
+- 配套接收适配器支持允许网段、本机管理接口和免 key；外部工具包、模型与网络配置另行提供。
+- 状态字体 MiSans/等线回退、常规字重、小中点和等宽四字按钮。
 
-- **倒计时功能**：
-  - 字体大小从32px减小到24px
-  - 顶部间距减小，使倒计时更靠上
-  - 倒计时与按钮之间的间距减小
-  - 按钮容器的底部间距减小
+### 发布验证
 
-- **按钮优化**：
-  - 字体大小从10px减小到9px
-  - 按钮内边距调整，确保按钮为正方形
-  - 按钮之间的间距从3减小到2
+开发环境 90 项逻辑测试、8 项 Strata 模拟 HTTP 测试、EXE 的 Tk 与异步保存检查通过。公开源码副本的 49 项核心测试通过。
 
-#### 空间分配优化
-- 整体高度减小，为时间流腾出更多空间
-- 布局更加紧凑，视觉效果更佳
+真实模型生成、真实工作中强退、跨设备局域网端到端调用和长期实机耐久测试尚未作为本次通过项。
 
-#### 问题修复
-- 修复倒计时位置过于靠下的问题
-- 修复按钮大小和形状不一致的问题
-- 修复整体布局空间分配不合理的问题
+## 旧版 2.0 · 标签 `stt_new` · 发布说明日期 2026.03.12
 
----
+原发布说明记录了以下布局变更：
 
-## Previous Versions / 历史版本
+- Caps Lock 文字由 12 调为 10，减少顶部和文本间距。
+- 倒计时文字由 32 调为 24，调整位置和与控制按钮的距离。
+- 按钮文字由 10 调为 9，缩小按钮间距与内边距。
+- 调整空间分配，为时间流留出更多显示区域。
 
-### Version 2025.11.22
-- Initial release with basic Caps Lock monitoring
-- Added screen time tracking functionality
-- Implemented visual timeline with pixel blocks
+旧版 Release 和下载附件保持不变，不把新版功能记入旧版历史。
 
-### Version 2025.11.25
-- Optimized memory usage and performance
-- Fixed pixel grid rendering issues
-- Improved database handling
+## 更早记录
+
+原更新日志记载：2025.11.22 提供基本大小写监控、屏幕时间和时间流；2025.11.25 涉及内存/性能、格子和数据库改进。这些是原日志记录，不代表当前对每个历史版本重新完成验证。
+
+[新版手册](optimized/README.md) · [旧版说明](docs/LEGACY.md)
