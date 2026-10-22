@@ -236,6 +236,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_startup_reuses_unloaded_service_without_loading(self):
         self.manager.probe.return_value = {'reachable': True, 'ready': False, 'service': 'strata'}
+        self.lifecycle.service_activity.return_value = {'loaded': False, 'in_flight': 0}
         self.assertTrue(self.backend.ensure_service()['ok'])
         self.http.assert_not_called()
         self.manager.set_state.assert_not_called()
@@ -246,7 +247,8 @@ class AdapterTests(unittest.TestCase):
         self.manager.request_json.return_value = {'version': 1, 'model': 'test', 'service': 'strata', 'exiting': False}
         self.assertTrue(self.backend.ensure_service()['ok'])
         self.http.assert_called_once()
-        self.assertEqual(self.http.call_args.args[:2], (self.config['base_url'] + '/stt/control', self.config))
+        self.assertEqual(self.http.call_args.args[:2], ('http://127.0.0.1:8080/metrics', self.config))
+        self.assertEqual(len(self.http.call_args.args), 2)  # Read-only GET, no control POST.
         self.assertLessEqual(self.http.call_args.kwargs['timeout'], 3)
         self.lifecycle.stop_verified_service.assert_not_called()
 

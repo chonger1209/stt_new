@@ -348,6 +348,22 @@ def run():
                 assert key_event.call_count == 2
             app.monitor = False
             result['caps_lock_rules'] = 'passed (mocked keyboard events)'
+            with patch.object(app.qwen_controller, 'drain_events') as drain, \
+                 patch('tkinter.messagebox.showinfo') as popup:
+                drain.return_value = [{'kind':'operation', 'action':'ensure_service',
+                                       'result':{'ok':False, 'message':'qwen_python_path：测试配置错误'}}]
+                app.poll_qwen_events()
+                popup.assert_not_called()
+                assert 'qwen_python_path' in app._qwen_note
+                drain.return_value = [{'kind':'status', 'status':{'state':'ready','detail':'服务已恢复'}}]
+                app.poll_qwen_events()
+                assert app._qwen_note == ''
+                drain.return_value = [{'kind':'operation', 'action':'start',
+                                       'result':{'ok':False,'message':'手动启动测试失败'}}]
+                app.poll_qwen_events()
+                popup.assert_called_once()
+                drain.return_value = []
+            result['automatic_prepare_notifications'] = 'passed (automatic silent, detail retained, recovery clears, manual failure notified)'
             assert not errors, errors
             pump_until(lambda: app.store.ready and app.store.pending_writes == 0)
             with patch.object(app, '_show_storage_warning') as warning:

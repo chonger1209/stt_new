@@ -551,13 +551,20 @@ class CapsLockChecker:
         for event in self.qwen_controller.drain_events():
             if event['kind'] == 'status':
                 self._qwen_status = event['status']
+                if (getattr(self, '_qwen_auto_note', False)
+                        and self._qwen_status.get('state') in ('ready', 'busy', 'unloaded', 'disabled')):
+                    self._qwen_note = ''
+                    self._qwen_auto_note = False
             else:
                 result = event['result']
                 self._qwen_note = result.get('message', '操作完成')
-                self.logger.info('千问手动%s: %s', event['action'], self._qwen_note)
+                self._qwen_auto_note = event['action'] == 'ensure_service' and not result.get('ok')
+                self.logger.info('千问操作%s: %s', event['action'], self._qwen_note)
                 # The worker's following status event is authoritative, including a
                 # remote request that already reloaded the model after an unload.
-                if not result.get('ok'):
+                if not result.get('ok') and event['action'] == 'ensure_service':
+                    self.logger.warning('千问自动准备未完成：%s', self._qwen_note)
+                elif not result.get('ok'):
                     from tkinter import messagebox
                     messagebox.showinfo('千问操作未完成', self._qwen_note, parent=self.root)
         self._paint_qwen_status()

@@ -10,10 +10,24 @@ import time
 import threading
 import urllib.error
 import urllib.request  # Required by the dynamically loaded toolkit in a frozen EXE.
+from contextlib import contextmanager, ExitStack
 
 import psutil  # Also makes the toolkit's process dependency available in the EXE.
 from qwen_status import metrics_display
+from qwen_errors import ServiceLockBusy
 from qwen_config import effective_config, toolkit_scripts
+
+
+@contextmanager
+def startup_locks(manager):
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(manager.lock('model-request', timeout=.3))
+            stack.enter_context(manager.lock('startup', timeout=.3))
+        except TimeoutError as error:
+            raise ServiceLockBusy('其他操作正在使用千问启动锁') from error
+        # Do not classify transport timeouts raised by the body as lock contention.
+        yield
 
 
 def idle_remaining(activity, reset_at, now, timeout=7200):
@@ -247,6 +261,14 @@ class ToolkitBackend:
         return self.unload(idle_seconds=self.idle_seconds)
 
     def ensure_service(self):
+        self._check_cancelled()
+        status = self.status()
+        self._check_cancelled()
+        if status.get('state') in ('ready', 'busy', 'unloaded'):
+            return {'ok': True, 'message': '已检测到千问接收服务，保留当前模型状态'}
+        if status.get('state') in ('disabled', 'unconfigured', 'error'):
+            return {'ok': False, 'message': status.get('detail', '千问配置或状态需要检查'),
+                    'retryable': False}
         return self.start(only_service=True)
 
     @staticmethod
@@ -348,7 +370,7 @@ class ToolkitBackend:
             manager.request_json = bounded_request
             manager._stt_budget_installed = True
         # Explicit user action: keep enabled/auto_start untouched, including when false.
-        with manager.lock('model-request', timeout=.3), manager.lock('startup', timeout=.3):
+        with startup_locks(manager):
             if not only_service:
                 config = self._activate_settings(manager, config)
             self._context.deadline = deadline

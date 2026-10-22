@@ -3,9 +3,13 @@ import queue
 import threading
 import time
 import urllib.error
+from qwen_errors import ServiceLockBusy
 
 
 class QwenController:
+    PREPARE_RETRY_DELAY = 2.0
+    PREPARE_MAX_RETRIES = 5
+
     def __init__(self, backend, interval=3.0, autostart=False):
         self.backend, self.interval = backend, max(.01, float(interval))
         self._requests = queue.Queue(maxsize=1)
@@ -17,6 +21,9 @@ class QwenController:
             self._requests.put_nowait('ensure_service')
         self._next_idle_check = 0.0
         self._poll_fast = False
+        self._prepare_retry_at = None
+        self._prepare_retries = 0
+        self._prepare_note = ''
         self._closed = threading.Event()
         self._generation = 0
         self._cancelled = threading.Event()
@@ -37,6 +44,9 @@ class QwenController:
         with self._lock:
             if self._pending is not None:
                 return False
+            if action != 'status':
+                self._prepare_retry_at = None
+                self._prepare_note = ''
             self._pending = action
             self._requests.put_nowait(action)
         return True
@@ -46,6 +56,8 @@ class QwenController:
             if self._closed.is_set() or self._pending == 'force_stop':
                 return False
             self._cancelled.set()
+            self._prepare_retry_at = None
+            self._prepare_note = ''
             self._generation += 1
             generation = self._generation
             self._cancelled = threading.Event()
@@ -82,8 +94,10 @@ class QwenController:
 
     @staticmethod
     def _error(error):
+        if isinstance(error, ServiceLockBusy):
+            return '其他操作正在使用千问启动锁，请稍后重试'
         if isinstance(error, TimeoutError):
-            return '服务正在处理其他请求或等待超时，请稍后重试'
+            return '千问请求或启动等待超时；服务端可能仍在处理，请先查看状态'
         if isinstance(error, urllib.error.HTTPError):
             return f'本地服务响应失败（HTTP {error.code}），未强制结束进程'
         if isinstance(error, FileNotFoundError):
@@ -115,14 +129,29 @@ class QwenController:
             status = {'state': 'error', 'detail': self._error(error)}
         with self._lock:
             if generation == self._generation and not cancelled.is_set():
+                if status.get('state') in ('ready', 'busy', 'unloaded', 'disabled'):
+                    self._prepare_retry_at = None
+                    self._prepare_note = ''
+                elif self._prepare_note:
+                    status = dict(status, detail=status.get('detail', '') + '\n' + self._prepare_note)
                 self._latest_status = status
                 self._poll_fast = status.get('state') == 'busy'
 
     def _loop(self, generation, cancelled, requests):
         self._status(generation, cancelled)
         while not self._closed.is_set() and not cancelled.is_set():
+            with self._lock:
+                if (generation == self._generation and self._prepare_retry_at is not None
+                        and self._pending is None and self._results.empty()):
+                    if time.monotonic() >= self._prepare_retry_at:
+                        self._prepare_retry_at = None
+                        self._pending = 'ensure_service'
+                        requests.put_nowait('ensure_service')
+                timeout = min(self.interval, 1.0) if self._poll_fast else self.interval
+                if self._prepare_retry_at is not None and self._prepare_retry_at > time.monotonic():
+                    timeout = min(timeout, max(.01, self._prepare_retry_at-time.monotonic()))
             try:
-                action = requests.get(timeout=min(self.interval, 1.0) if self._poll_fast else self.interval)
+                action = requests.get(timeout=timeout)
             except queue.Empty:
                 self._status(generation, cancelled)
                 continue
@@ -136,12 +165,26 @@ class QwenController:
                 continue
             try:
                 result = self._invoke(action, cancelled)
+            except ServiceLockBusy as error:
+                result = {'ok': False, 'code': 'lock_busy', 'retryable': True, 'message': self._error(error)}
             except Exception as error:
                 result = {'ok': False, 'message': self._error(error)}
             # Preserve the operation result until the UI drains it; coalesce probes.
             with self._lock:
                 if generation != self._generation or cancelled.is_set():
                     return
+                if action == 'ensure_service':
+                    if result.get('code') == 'lock_busy' and result.get('retryable'):
+                        if self._prepare_retries < self.PREPARE_MAX_RETRIES:
+                            self._prepare_retries += 1
+                            self._prepare_retry_at = time.monotonic() + self.PREPARE_RETRY_DELAY
+                            result = dict(result, message=f'千问启动锁暂被占用，稍后自动重试（{self._prepare_retries}/{self.PREPARE_MAX_RETRIES}）')
+                        else:
+                            self._prepare_retry_at = None
+                            result = dict(result, message='自动准备已停止重试：千问启动锁持续被占用，可稍后手动启动')
+                    else:
+                        self._prepare_retry_at = None
+                    self._prepare_note = '' if result.get('ok') else result.get('message', '')
                 self._results.put_nowait({'kind': 'operation', 'action': action, 'result': result})
             self._status(generation, cancelled)
 
@@ -161,6 +204,8 @@ class QwenController:
     def close(self):
         self._closed.set()
         self._cancelled.set()
+        with self._lock:
+            self._prepare_retry_at = None
         try:
             self._requests.put_nowait(None)
         except queue.Full:
