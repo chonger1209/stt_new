@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 import sys
 import threading
+import os
+import uuid
 from urllib.parse import urlsplit
 
 
@@ -63,6 +65,7 @@ def install(server, networks):
         # This deployment intentionally uses subnet admission, not API keys.
         svc.api_key = None
         gate = Admission()
+        instance_id = str(uuid.uuid4())
         native = native_factory(svc)
 
         class Handler(native):
@@ -74,7 +77,7 @@ def install(server, networks):
                     return
                 if not self._authorized():
                     return
-                self._json(200, {'version': 1, 'exiting': gate.exiting,
+                self._json(200, {'version': 1, 'exiting': gate.exiting, 'instance_id': instance_id,
                                  'model': svc.model, 'service': 'strata'})
 
             def do_POST(self):
@@ -107,6 +110,17 @@ def install(server, networks):
                     except Exception:
                         self._json(503, {'error': 'lifecycle operation failed'})
                     return
+                # Fail closed on corrupt/missing state when managed by the task.
+                state_root = os.environ.get('QWEN_LIFECYCLE_ROOT')
+                if state_root:
+                    try:
+                        state = json.loads((Path(state_root) / 'runtime/service-state.json').read_text(encoding='utf-8'))
+                        enabled = state.get('desired_state') == 'enabled'
+                    except (OSError, ValueError):
+                        enabled = False
+                    if not enabled:
+                        self._json(503, {'error': 'service manually stopped; request was not executed'})
+                        return
                 if not gate.enter():
                     self._json(503, {'error': 'service is exiting; request was not executed'})
                     return

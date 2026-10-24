@@ -4,6 +4,8 @@
 
 **旧版与新版同时保留。** 仓库根目录的 `stt_new.py`、`dist/stt_new.exe` 是旧版；新版源码独立位于 [`optimized/`](optimized/)。
 
+> **2026-10-24 当前源码更新：** 独立启动、持久停止与共享加载管理已合入。[部署教程与验收边界](optimized/docs/INDEPENDENT_SERVICE.md)。下表 Release 仍是历史构建，本次未发布新二进制附件。
+
 ## 选择版本与下载
 
 | 版本 | 核心功能与区别 | 适合谁 / 建议 | 下载 | 源码和说明 |

@@ -76,8 +76,8 @@ qwen_working_directory =
 # qwen_launch_args: 启动参数，填 JSON 字符串数组，建议路径用 /；例 ["serve/server.py", "--port", "8765"]。
 # 必须复制已经验证可用的参数；模型路径通常也在其中。留空沿用，[] 表示明确清空参数。
 qwen_launch_args =
-# qwen_startup_timeout_seconds: 整个启动操作的总等待预算，单位秒，正整数；默认180。
-qwen_startup_timeout_seconds = 180
+# qwen_startup_timeout_seconds: 整个启动操作的总等待预算，单位秒，正整数；默认900。
+qwen_startup_timeout_seconds = 900
 
 # 进程配置（可选，不是白名单）
 # 没有配置的程序也会正常记录，默认在统计和时间流中都显示；通常显示进程文件名。

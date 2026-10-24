@@ -3,7 +3,7 @@
   "model": "",
   "api_key_required": false,
   "stt_control": true,
-  "startup_timeout_sec": 180,
+  "startup_timeout_sec": 900,
   "launch": {
     "command": "",
     "cwd": "",
@@ -14,5 +14,6 @@
     "owner": "stt",
     "shutdown_mode": "unload",
     "unload_on_codex_exit": false
-  }
+  },
+  "scheduled_task": "Qwen-Independent-Receiver"
 }

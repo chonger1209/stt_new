@@ -13,7 +13,7 @@ FIELDS = {
     'qwen_python_path': ('', '模型环境的 python.exe 完整路径；例 E:/AI/Strata/.venv/Scripts/python.exe。留空沿用工具包。'),
     'qwen_working_directory': ('', '模型服务工作目录，例 E:/AI/Strata；留空沿用工具包。'),
     'qwen_launch_args': ('', '启动参数，填 JSON 字符串数组，建议路径用 /；例 ["serve/server.py", "--port", "8765"]。\n# 必须复制已经验证可用的参数；模型路径通常也在其中。留空沿用，[] 表示明确清空参数。'),
-    'qwen_startup_timeout_seconds': (180, '整个启动操作的总等待预算，单位秒，正整数；默认180。'),
+    'qwen_startup_timeout_seconds': (900, '整个启动操作的总等待预算，单位秒，正整数；默认900。'),
 }
 
 
@@ -55,7 +55,7 @@ def migrate_existing(path, scripts=None):
                'qwen_model_id': c.get('model', ''), 'qwen_python_path': launch.get('command', ''),
                'qwen_working_directory': launch.get('cwd', ''),
                'qwen_launch_args': json.dumps(launch.get('args', []), ensure_ascii=False),
-               'qwen_startup_timeout_seconds': c.get('startup_timeout_sec', 180)}
+               'qwen_startup_timeout_seconds': c.get('startup_timeout_sec', 900)}
     addition = []
     for key, value in imports.items():
         if key not in values:
@@ -106,7 +106,7 @@ def effective_config(settings, existing):
         raise ValueError('qwen_working_directory：工作目录不存在')
     if not isinstance(launch.get('args'),list) or not all(isinstance(a,str) for a in launch['args']):
         raise ValueError('qwen_launch_args：缺少启动参数数组')
-    wait = settings.get('qwen_startup_timeout_seconds',180)
+    wait = settings.get('qwen_startup_timeout_seconds',900)
     if isinstance(wait,bool) or not isinstance(wait,int) or wait <= 0:
         raise ValueError('qwen_startup_timeout_seconds：必须是正整数')
     config['startup_timeout_sec'] = wait

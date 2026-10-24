@@ -313,137 +313,21 @@ class ToolkitBackend:
         self._check_cancelled()
         manager, lifecycle = self._load()
         config = manager.config()
-        # Configuration refresh itself never writes or starts anything.
-        if self._settings is not None:
-            requested = self._settings.get('qwen_toolkit_path', '')
-            if requested and toolkit_scripts(requested) != self.scripts:
-                if manager.port_busy(config):
-                    raise ValueError('千问配置已暂存：请先退出原服务，再切换管理工具包')
-                self.scripts = toolkit_scripts(requested)
-                self.manager = self.lifecycle = None
-                manager, lifecycle = self._load()
-                config = manager.config()
-        wait = max(1, float((self._settings or {}).get('qwen_startup_timeout_seconds', config.get('startup_timeout_sec',180))))
-        deadline = time.monotonic() + wait
-        def remaining():
-            value = deadline - time.monotonic()
-            if value <= 0:
-                raise TimeoutError('启动总等待预算已耗尽')
-            return value
-        # Scope budgets to this thread; a cancelled old start must never
-        # replace the HTTP function used by the independent force/status worker.
-        if getattr(manager, '_stt_budget_installed', False) is not True:
-            original_request = manager.request_json
-            def bounded_request(url, c, body=None, timeout=3):
-                limit = getattr(self._context, 'deadline', None)
-                if limit is None:
-                    return original_request(url, c, body, timeout=timeout)
-                self._check_cancelled()
-                left = limit - time.monotonic()
-                if left <= 0:
-                    raise TimeoutError('启动总等待预算已耗尽')
-                # Socket timeouts alone restart on each read. Bound the caller
-                # even if a server slowly drips a response or stalls in JSON read.
-                done = threading.Event()
-                outcome = []
-                def perform():
-                    try:
-                        outcome.append((True, original_request(url, c, body, timeout=min(timeout,left))))
-                    except Exception as error:
-                        outcome.append((False,error))
-                    finally:
-                        done.set()
-                threading.Thread(target=perform, daemon=True, name='qwen-start-http').start()
-                while not done.is_set():
-                    self._check_cancelled()
-                    left = limit - time.monotonic()
-                    if left <= 0:
-                        raise TimeoutError('启动总等待预算已耗尽；服务端加载可能仍在继续')
-                    done.wait(min(.05,left))
-                success, result = outcome[0]
-                if not success:
-                    raise result
-                self._check_cancelled()
-                if time.monotonic() >= limit:
-                    raise TimeoutError('启动总等待预算已耗尽')
-                return result
-            manager.request_json = bounded_request
-            manager._stt_budget_installed = True
-        # Explicit user action: keep enabled/auto_start untouched, including when false.
-        with startup_locks(manager):
-            if not only_service:
-                config = self._activate_settings(manager, config)
-            self._context.deadline = deadline
-            try:
-                return self._start_with_budget(manager, lifecycle, config, only_service, deadline, remaining)
-            finally:
-                self._context.deadline = None
-
-    def _start_with_budget(self, manager, lifecycle, config, only_service, deadline, remaining):
-        wait = remaining()
-        load_requested = False
-        probe = manager.probe(config)
-        remaining()
-        self._check_cancelled()
-        if probe.get('reachable') and not probe.get('error'):
-            control = self._control(manager, config)
-            if control and control.get('exiting'):
-                manager.request_json(config['base_url'] + '/stt/cancel-exit', config,
-                                     {'model': config['model']})
-        if probe.get('ready') and probe.get('service') == 'strata':
-            return {'ok': True, 'message': '千问已经就绪'}
-        if probe.get('reachable'):
-            if probe.get('error') or probe.get('service') != 'strata':
-                return {'ok': False, 'message': '端口上的服务或模型不匹配，未启动第二份服务'}
-            if only_service:
-                return {'ok': True, 'message': '千问接收服务已运行，保留当前模型状态'}
-            self._check_cancelled()
-            manager.request_json(config['base_url'] + '/load', config,
-                                 {'model': config['model']}, timeout=wait)
-            load_requested = True
-        else:
-            if manager.port_busy(config):
-                return {'ok': False, 'message': '本地端口已占用，未启动第二份服务'}
-            launch = config['launch']
-            if not Path(launch['command']).is_file() or not Path(launch['cwd']).is_dir():
-                return {'ok': False, 'message': '全局千问配置中的启动程序或目录不存在'}
-            runtime = manager.ROOT / 'runtime'
-            runtime.mkdir(exist_ok=True)
-            flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
-            with (runtime / 'service.log').open('ab') as log:
-                with self._launch_gate:
-                    self._check_cancelled()
-                    remaining()
-                    process = launch_external([launch['command'], *launch['args']], cwd=launch['cwd'],
-                                               stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                               creationflags=flags, env=manager.service_environment(config))
-                    self._launched = lifecycle.identity(process.pid)
-            manager.atomic_json(runtime / 'last-launch.json',
-                                {'pid': process.pid, 'at': manager.now(), 'model': config['model']})
-        self._check_cancelled()
-        self._watchdog(config)
-        while time.monotonic() < deadline:
-            self._check_cancelled()
-            probe = manager.probe(config)
-            remaining()
-            self._check_cancelled()
-            if (only_service and probe.get('reachable') and not probe.get('error')
-                    and probe.get('service') == 'strata'):
-                return {'ok': True, 'message': '千问接收服务已准备好，首次请求可加载模型'}
-            if probe.get('ready') and probe.get('service') == 'strata':
-                return {'ok': True, 'message': '千问已启动并就绪'}
-            if (not only_service and not load_requested and probe.get('reachable')
-                    and not probe.get('error') and probe.get('service') == 'strata'
-                    and probe.get('loaded') is False):
-                load_requested = True
-                manager.request_json(config['base_url'] + '/load', config,
-                                     {'model': config['model']}, timeout=remaining())
-            time.sleep(min(.7, max(0, deadline-time.monotonic())))
-        return {'ok': False, 'message': '启动等待超时；服务可能仍在加载，请等待状态刷新'}
+        desired = self._desired(config)
+        if any(desired.get(k) != config.get(k) for k in ('base_url', 'model', 'launch')):
+            return {'ok': False, 'message': '启动配置已暂存；独立任务配置须一并迁移，未直接启动服务'}
+        # Do not activate launch-path changes against an existing task here.
+        # Deployment must update task/config together after migration approval.
+        try:
+            return manager.runtime().ensure(source='stt', only_service=only_service,
+                explicit=not only_service, cancelled=self._check_cancelled)
+        except Exception as e:
+            return {'ok': False, 'message': str(e)}
 
     def force_stop(self):
         """Explicit user abort: OS identities only, no HTTP or model locks."""
         manager, lifecycle = self._load()
+        manager.runtime().desire(False, 'stt-force-stop')
         config = manager.config()
         with self._launch_gate:
             roots = []
@@ -496,7 +380,8 @@ class ToolkitBackend:
                         pass
 
     def stop(self):
-        return self._shutdown(terminate=True)
+        manager, _ = self._load()
+        return manager.runtime().stop(source='stt')
 
     def unload(self, idle_seconds=None):
         return self._shutdown(idle_seconds=idle_seconds, terminate=False)
