@@ -1,10 +1,10 @@
-> **2026-10-24 当前源码已更新：** 新工具包需先注册独立计划任务，STT 与共享配置必须一致；下面旧版接入/自动同步说明不适用于本轮源码。历史 Release EXE 尚未更新。请先阅读[独立启动配置](docs/INDEPENDENT_SERVICE.md)。
+> **2026-10-24 当前源码已更新：** 新工具包需先注册独立计划任务，STT 与共享配置必须一致；旧版自动覆盖共享配置的做法已停用。本发布已包含配套 EXE 和工具包。请先阅读[独立启动配置](docs/INDEPENDENT_SERVICE.md)。
 
-# STT 2026.10.22.3 · 千问增强版使用手册
+# STT 2026.10.24 · 千问增强版使用手册
 
 STT 是 Windows 桌面悬浮工具，把 **Caps Lock 状态、按软件自动切换大小写、前台应用计时、彩色时间流和番茄倒计时** 放在一个小窗口里。配置兼容环境后，还能管理本地千问模型服务。
 
-本手册对应 `v2026.10.22.3` 优化版。[基础版](https://github.com/chonger1209/stt_new/releases/tag/stt_new) 仍可下载；旧版的功能与计时实现不以本手册为准。
+本手册对应 `v2026.10.24` 优化版。[基础版](https://github.com/chonger1209/stt_new/releases/tag/stt_new) 仍可下载；旧版的功能与计时实现不以本手册为准。
 
 ## 千问状态与生成速度
 
@@ -42,14 +42,14 @@ STT 是 Windows 桌面悬浮工具，把 **Caps Lock 状态、按软件自动切
 
 ## 下载与首次运行
 
-[打开新版发布页](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.22.3)。
+[打开新版发布页](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.24)。
 
 | 文件 | 用途 |
 |---|---|
-| `STT-2026.10.22.3-windows-x64-portable.zip` | 推荐，包含程序、图标、中文默认配置、完整文档与可选服务适配器 |
-| `stt_new-2026.10.22.3-windows-x64.exe` | 仅程序，首次运行自动生成配置和数据文件 |
-| `STT-2026.10.22.3-source.zip` | 新版源码和文档，运行需 Python 及依赖 |
-| `STT-2026.10.22.3-SHA256SUMS.txt` | 下载完整性校验 |
+| `STT-2026.10.24-windows-x64-portable.zip` | 推荐，包含程序、图标、中文默认配置、完整文档与可选服务适配器 |
+| `stt_new-2026.10.24-windows-x64.exe` | 仅程序，首次运行自动生成配置和数据文件 |
+| `STT-2026.10.24-source.zip` | 新版源码和文档，运行需 Python 及依赖 |
+| `STT-2026.10.24-SHA256SUMS.txt` | 下载完整性校验 |
 
 便携程序面向 Windows x64，不需要安装 Python。未提供 macOS/Linux 可执行程序。
 
@@ -281,4 +281,4 @@ STT/
 
 真实千问生成、真实工作中强退、其他电脑局域网端到端调用、长期实机耐久测试未作为本次通过项，所以仍为试用版。布局尺寸测试不能替代不同屏幕/DPI 下的观感检查。
 
-[仓库首页](https://github.com/chonger1209/stt_new) · [新版下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.22.3) · [旧版下载](https://github.com/chonger1209/stt_new/releases/tag/stt_new)
+[仓库首页](https://github.com/chonger1209/stt_new) · [新版下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.24) · [旧版下载](https://github.com/chonger1209/stt_new/releases/tag/stt_new)

@@ -1,4 +1,4 @@
-> **2026-10-24 当前源码已更新：** 新工具包需先注册独立计划任务，STT 与共享配置必须一致；下面旧版接入/自动同步说明不适用于本轮源码。历史 Release EXE 尚未更新。请先阅读[独立启动配置](INDEPENDENT_SERVICE.md)。
+> **2026-10-24 当前源码已更新：** 新工具包需先注册独立计划任务，STT 与共享配置必须一致；旧版自动覆盖共享配置的做法已停用。本发布已包含配套 EXE 和工具包。请先阅读[独立启动配置](INDEPENDENT_SERVICE.md)。
 
 # 新版配置手册
 
@@ -41,7 +41,7 @@
 | `qwen_python_path` | `留空` | 模型环境的 python.exe 完整路径；例 E:/AI/Strata/.venv/Scripts/python.exe。留空沿用工具包。 |
 | `qwen_working_directory` | `留空` | 模型服务工作目录，例 E:/AI/Strata；留空沿用工具包。 |
 | `qwen_launch_args` | `留空` | 启动参数，填 JSON 字符串数组，建议路径用 /；例 ["serve/server.py", "--port", "8765"]。 |
-| `qwen_startup_timeout_seconds` | `180` | 整个启动操作的总等待预算，单位秒，正整数；默认180。 |
+| `qwen_startup_timeout_seconds` | `900` | 整个启动操作的总等待预算，单位秒；需与共享 service.json 的 startup_timeout_sec 一致。 |
 
 无效颜色由界面检查后回退默认色。整数格式错误或应为正数却小于等于 0 时回退默认值，并记录原因。布尔值拼写无效会警告并回退默认值；不要把“不认识的文字”当作受支持的开关值。
 
