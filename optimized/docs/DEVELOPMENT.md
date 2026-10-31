@@ -109,7 +109,7 @@ python stt_new.py --smoke-test --fresh-config --fallback-font --smoke-output smo
 先执行 optimized/build_exe.py 构建，再运行：
 
 ```powershell
-python tools/package_release.py --version 2026.10.22.3 --exe optimized/dist/stt_new.exe --out E:/STT-release
+python tools/package_release.py --edition optimized --version 2026.10.22.3 --exe optimized/dist/stt_new.exe --out E:/STT-release
 ```
 
 只打包 Git 已跟踪的新版源码、默认配置与空工具包模板。输出独立 EXE、便携 ZIP、源码 ZIP 和 SHA256 清单；不读取个人 config 或数据库。参数只用于生成本地附件，不会自动上传 GitHub。发布新修订时更新文档版本并创建新标签，保留旧附件。

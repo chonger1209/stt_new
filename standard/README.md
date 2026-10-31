@@ -1,4 +1,4 @@
-# STT 2026.10.31 · 标准版
+# STT 2026.10.31.1 · 标准版
 
 适用于Windows的屏幕时间与Caps Lock助手。独立EXE，不需要Python、模型、Strata、Codex、千问工具包或计划任务。
 
@@ -16,7 +16,7 @@
 
 ## 下载和使用
 
-推荐从 v2026.10.31 发布页下载标准版便携包，完整解压到可写目录后运行 stt_new.exe。单独EXE也可运行：缺少配置、数据库或logs目录时会自动创建。不要在ZIP中直接运行。
+推荐从 v2026.10.31.1 发布页下载标准版便携包，完整解压到可写目录后运行 stt_new.exe。单独EXE也可运行：缺少配置、数据库或logs目录时会自动创建。不要在ZIP中直接运行。
 
 标题栏齿轮或右键“设置”打开 config.txt；保存后点击刷新。Esc或右键“关闭”是正常退出。
 
@@ -32,7 +32,17 @@
 
 源码目录为仓库 standard/。安装 requirements.txt 后运行 python stt_new.py；构建使用 python build_exe.py，输出至 dist。统计和保存等核心模块与当前 optimized/ 逐字节一致。
 
-测试：python -B -m unittest test_regressions test_async_storage test_reliability test_single_instance
+测试：python -B -m unittest test_implementation test_regressions test_async_storage test_reliability test_single_instance
 界面验收：python -B stt_new.py --smoke-test --smoke-output result.json
 
-57项统计、保存、时钟、进程与单实例测试通过；源码和打包EXE的真实Tk隔离验收通过，包括倒计时居中、无模型模块/线程、60秒格子、缓存、倒计时刷新、数据库锁定时Tk响应和最终保存退出。未进行数天连续实机耐久验收，本次仍作为试用版发布。
+68项统计、保存、时钟、进程与单实例测试通过；源码和打包EXE的真实Tk隔离验收通过，包括倒计时居中、无模型模块/线程、60秒格子、缓存、倒计时刷新、数据库锁定时Tk响应和最终保存退出。未进行数天连续实机耐久验收，本次仍作为试用版发布。
+
+## 2026.10.31.1 内部实现改进
+
+辅助像素日志失败延期重试，不再堵住关键统计；文本日志移到有界后台队列，正常退出异步收尾；修复提交失败时待保存计数恢复；缓存稳定历史前缀、分离统计和时间流计算；统一代码格式及仓库打包入口。功能、颜色、布局与配置默认值不变。
+
+文本日志队列最多1024条，极端慢磁盘积压时允许略过文本并记录数量，统计数据仍走独立可靠保存队列。关键统计落盘后，退出最多额外等文本日志2秒，不会为日志卡住界面。辅助数据库日志保留重试，不丢关键统计。
+
+公共打包命令（仓库根目录，构建后的EXE路径自行替换）：
+python tools/package_release.py --edition standard --version 2026.10.31.1 --exe standard/dist/stt_new.exe --out <输出目录>
+增强版应明确使用 --edition optimized，不能混用。输出目录已有同名附件时拒绝覆盖。
