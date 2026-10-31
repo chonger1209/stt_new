@@ -115,6 +115,8 @@ class AsyncHistoryStore:
         self.logger = logger or logging.getLogger(__name__)
         self.ready = False
         self.pending_writes = 0
+        self.pending_critical_writes = 0
+        self.pending_aux_writes = 0
         self.read_queries = 0
         self.version = 0
         self.failure_since = None
@@ -161,11 +163,16 @@ class AsyncHistoryStore:
             raise RuntimeError("数据库工作线程已关闭")
         payload = tuple(rows)  # Conversion may fail; reserve no acknowledgement yet.
         self.pending_writes += 1
+        counter = (
+            "pending_aux_writes" if kind == "pixels" else "pending_critical_writes"
+        )
+        setattr(self, counter, getattr(self, counter) + 1)
         try:
             target = self._aux_jobs if kind == "pixels" else self._jobs
             target.put((kind, payload, committed))
         except Exception:
             self.pending_writes -= 1
+            setattr(self, counter, getattr(self, counter) - 1)
             raise
         self._wake.set()
 
@@ -182,6 +189,13 @@ class AsyncHistoryStore:
             self.failure_since = None
             self.last_error = ""
 
+    @property
+    def critical_failure_since(self):
+        return min(
+            (since for kind, (since, _) in self._failures.items() if kind != "pixels"),
+            default=None,
+        )
+
     def poll(self):
         """Called only by the UI; callback and cache change occur in one turn."""
         failures = []
@@ -190,6 +204,14 @@ class AsyncHistoryStore:
                 kind, payload, callback, result, error = self._events.get_nowait()
             except queue.Empty:
                 break
+            if kind == "cancelled_pixels":
+                self.pending_writes -= payload
+                self.pending_aux_writes -= payload
+                self._set_failure("pixels", None)
+                self.logger.warning(
+                    "退出时略过%s批未完成的辅助像素日志；关键统计已保存", payload
+                )
+                continue
             if error is not None:
                 self._set_failure(kind, error)
                 failures.append((kind, str(error)))
@@ -204,6 +226,12 @@ class AsyncHistoryStore:
                 self._cache = {payload: result}
             else:
                 self.pending_writes -= 1
+                counter = (
+                    "pending_aux_writes"
+                    if kind == "pixels"
+                    else "pending_critical_writes"
+                )
+                setattr(self, counter, getattr(self, counter) - 1)
                 if kind == "intervals":
                     self.version += 1
                     for stamp, app, duration in payload:
@@ -219,11 +247,17 @@ class AsyncHistoryStore:
                         self.logger.exception(
                             "数据库已提交，但保存回执处理异常；不重试已提交事务"
                         )
-                        failures.append(("acknowledgement", str(error)))
+                        failures.append(
+                            (
+                                "pixels" if kind == "pixels" else "acknowledgement",
+                                str(error),
+                            )
+                        )
         return failures
 
     def _run(self):
         store = None
+        deferred_aux = None
         try:
             while not self._closed.is_set() and store is None:
                 try:
@@ -232,7 +266,6 @@ class AsyncHistoryStore:
                 except Exception as error:
                     self._events.put(("initialize", None, None, None, error))
                     self._closed.wait(self._retry_seconds)
-            deferred_aux = None
             retry_at = 0
             while not self._closed.is_set():
                 # Clear before checking queues: a producer waking us after this
@@ -255,6 +288,10 @@ class AsyncHistoryStore:
                 if job is None:
                     return
                 kind, payload, callback = job
+                if self._closed.is_set():
+                    if kind == "pixels":
+                        deferred_aux = job
+                    break
                 while not self._closed.is_set():
                     try:
                         if kind == "read":
@@ -280,6 +317,15 @@ class AsyncHistoryStore:
                         self._events.put((kind, payload, callback, result, None))
                         break
         finally:
+            cancelled = int(deferred_aux is not None)
+            while True:
+                try:
+                    self._aux_jobs.get_nowait()
+                    cancelled += 1
+                except queue.Empty:
+                    break
+            if cancelled:
+                self._events.put(("cancelled_pixels", cancelled, None, None, None))
             try:
                 if store is not None:
                     store.close()
@@ -287,7 +333,7 @@ class AsyncHistoryStore:
                 self.stopped.set()
 
     def close(self):
-        if self.pending_writes:
+        if self.pending_critical_writes:
             raise RuntimeError("仍有未确认保存的数据，不能退出")
         if not self._closed.is_set():
             self._closed.set()

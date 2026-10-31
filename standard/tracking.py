@@ -214,6 +214,36 @@ def timeline_blocks(history, seconds_per_block, visible):
     return _timeline_state(history, seconds_per_block, visible)[0]
 
 
+def timeline_window(blocks, columns, rows, top_row=None):
+    """Expand only one visible window of a run-length encoded timeline.
+
+    top_row=None follows the newest row. Returned cell positions are relative
+    to this viewport; the underlying history and total block count are intact.
+    """
+    if columns <= 0 or rows <= 0:
+        raise ValueError("viewport dimensions must be positive")
+    if not isinstance(blocks, (list, tuple)):
+        blocks = tuple(blocks)
+    total = sum(count for _, count in blocks)
+    total_rows = (total + columns - 1) // columns
+    maximum = max(0, total_rows - rows)
+    top = maximum if top_row is None else max(0, min(top_row, maximum))
+    start, end = top * columns, min(total, (top + rows) * columns)
+    offset = 0
+    cells = []
+    for app, count in blocks:
+        stop = offset + count
+        if stop > start:
+            cells.extend(
+                (app, index - start)
+                for index in range(max(start, offset), min(end, stop))
+            )
+        offset = stop
+        if offset >= end:
+            break
+    return cells, top, maximum
+
+
 def _timeline_state(history, seconds_per_block, visible, prefix=(), elapsed_ticks=0):
     block_ticks = round(seconds_per_block * 1_000_000)
     if block_ticks <= 0:

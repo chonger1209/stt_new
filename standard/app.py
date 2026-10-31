@@ -15,7 +15,7 @@ import win32process
 
 from settings import DEFAULTS, read_settings, save_position
 from storage import AsyncHistoryStore
-from tracking import Countdown, UsageTracker, timeline_blocks
+from tracking import Countdown, UsageTracker, timeline_blocks, timeline_window
 from process_identity import executable_name
 from async_logging import AsyncFileLog
 
@@ -32,6 +32,11 @@ class CapsLockChecker:
         self._jobs = {}
         self._history_bindings = []
         self._history_key = None
+        self._history_blocks = ()
+        self._history_follow = True
+        self._history_top_row = 0
+        self._history_max_top = 0
+        self._history_day = None
         self._stats_key = None
         self._stats_items = []
         self._logged_through = datetime.datetime.now().isoformat(
@@ -87,7 +92,7 @@ class CapsLockChecker:
             "#95a5a6",
         ]
         self.app_color_map = {}
-        self.history_bar_h = 120
+        self.history_bar_h = 100
         self.last_window_height = self.config["window_height"]
         self.auto_restore_timer = None
         self.height_change_detected = False
@@ -174,19 +179,25 @@ class CapsLockChecker:
     def poll_storage_events(self):
         version = self.store.version
         failures = self.store.poll()
-        if self.store.failure_since is None:
+        critical_failures = [failure for failure in failures if failure[0] != "pixels"]
+        failed_since = self.store.critical_failure_since
+        if failed_since is None:
             self._storage_alerted = False
-        elif (
-            not self._storage_alerted
-            and time.monotonic() - self.store.failure_since >= 60
-        ):
+        elif not self._storage_alerted and time.monotonic() - failed_since >= 60:
             self._storage_alerted = True
             self._show_storage_warning()
         if failures and time.monotonic() - self._last_storage_warning >= 5:
             self._last_storage_warning = time.monotonic()
-            self.logger.error("后台保存暂未完成；保留数据并重试：%s", failures[-1])
+            if critical_failures:
+                self.logger.error(
+                    "后台保存暂未完成；保留数据并重试：%s", critical_failures[-1]
+                )
+            else:
+                self.logger.warning(
+                    "辅助像素日志暂未完成；统计保存和正常退出不受影响：%s", failures[-1]
+                )
         if self._exit_requested:
-            if failures:
+            if critical_failures:
                 self._exit_requested = False
                 self.start_scheduled_tasks()
                 from tkinter import messagebox
@@ -199,10 +210,11 @@ class CapsLockChecker:
             elif (
                 self.store.ready
                 and not self.tracker.pending
-                and not self.store.pending_writes
+                and not self.store.pending_critical_writes
             ):
                 self.store.close()
                 if self.store.stopped.is_set():
+                    self.store.poll()  # Consume final auxiliary cancellation receipts.
                     self._finish_close()
                     return
         if version != self.store.version and not self._exit_requested:
@@ -259,17 +271,28 @@ class CapsLockChecker:
         self._history_bindings.clear()
 
     def render_history_stream(self, log_new_pixels=False, history=None):
+        day = datetime.datetime.fromtimestamp(self.tracker.clock()).date().isoformat()
+        if day != self._history_day:
+            self._history_day = day
+            self._history_follow = True
+            self._history_top_row = 0
+        visibility = {}
+        for rule in self.config.get("process_config", {}).values():
+            visibility.setdefault(
+                rule["display_name"], rule.get("show_in_time_stream", True)
+            )
+        visible = lambda app: visibility.get(app, True)
         if history is None:
             blocks = self.tracker.timeline_snapshot(
                 self.grid_second_per_block,
-                lambda app: self.check_app_display_config(app, "show_in_time_stream"),
+                visible,
                 visibility_key=id(self.config),
             )
         else:
             blocks = timeline_blocks(
                 history,
                 self.grid_second_per_block,
-                lambda app: self.check_app_display_config(app, "show_in_time_stream"),
+                visible,
             )
         if log_new_pixels:
             # Only log completed records; the live tail will be captured by the next sample.
@@ -281,33 +304,53 @@ class CapsLockChecker:
             if fresh:
                 self.store.submit_pixels(fresh, self._pixels_saved)
                 self._logged_through = max(row[0] for row in fresh)
-        width = self.history_canvas.winfo_width()
-        if width <= 1:
+        self._history_blocks = tuple(blocks)
+        # Preserve the existing per-application palette assignment order even
+        # when early cells are outside the visible viewport.
+        for app, _ in blocks:
+            self._color(app)
+        self._draw_history_window()
+
+    def _draw_history_window(self):
+        width, height = (
+            self.history_canvas.winfo_width(),
+            self.history_canvas.winfo_height(),
+        )
+        if width < 5 or height < 5:
             return
+        # The viewport remains fixed; neither a 1-second setting nor a huge
+        # display can create an unbounded number of Tk canvas objects.
+        limit = 2000
+        columns = max(1, min(width // 5, limit))
+        rows = max(1, min(height // 5, limit // columns))
+        cells, top, maximum = timeline_window(
+            self._history_blocks,
+            columns,
+            rows,
+            None if self._history_follow else self._history_top_row,
+        )
+        self._history_top_row = top
+        self._history_max_top = maximum
+        if top == maximum:
+            self._history_follow = True
         key = (
             width,
-            tuple(blocks),
-            tuple((app, self._color(app)) for app, _ in blocks),
+            height,
+            top,
+            tuple((app, index, self._color(app)) for app, index in cells),
         )
         if key == self._history_key:
             return
         self._history_key = key
         self._clear_history_bindings()
         self.history_canvas.delete("all")
-        max_cols = max(1, width // 5)
-        total = sum(count for _, count in blocks)
-        self.history_bar_h = max(20, (total + max_cols - 1) // max_cols) * 5
-        self.history_canvas.configure(height=self.history_bar_h)
-        index = 0
         tags = {}
-        for app, count in blocks:
+        for app, index in cells:
             tag = tags.setdefault(app, f"app_{len(tags)}")
-            for _ in range(count):
-                x, y = (index % max_cols) * 5, (index // max_cols) * 5
-                self.history_canvas.create_rectangle(
-                    x, y, x + 4, y + 4, fill=self._color(app), outline="", tags=(tag,)
-                )
-                index += 1
+            x, y = (index % columns) * 5, (index // columns) * 5
+            self.history_canvas.create_rectangle(
+                x, y, x + 4, y + 4, fill=self._color(app), outline="", tags=(tag,)
+            )
         for app, tag in tags.items():
             callbacks = {
                 "<Enter>": lambda event, name=app: self.show_tooltip(event, name),
@@ -317,6 +360,16 @@ class CapsLockChecker:
             for event, callback in callbacks.items():
                 function = self.history_canvas.tag_bind(tag, event, callback)
                 self._history_bindings.append((tag, event, function))
+
+    def on_history_mousewheel(self, event):
+        delta = event.delta
+        if delta:
+            step = (-3 if delta > 0 else 3) * max(1, abs(delta) // 120)
+            top = max(0, min(self._history_max_top, self._history_top_row + step))
+            self._history_top_row = top
+            self._history_follow = top == self._history_max_top
+            self._draw_history_window()
+        return "break"  # Do not also scroll the statistics panel's global binding.
 
     def _pixels_saved(self, inserted):
         summary = {}
@@ -993,6 +1046,7 @@ class CapsLockChecker:
             highlightthickness=0,
         )
         self.history_canvas.pack(fill=tk.X, expand=False, side=tk.BOTTOM)
+        self.history_canvas.bind("<MouseWheel>", self.on_history_mousewheel)
 
         self._create_tooltip()
 
