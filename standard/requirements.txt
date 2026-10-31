@@ -1,0 +1,3 @@
+pywin32>=308
+# Optional build tool:
+pyinstaller>=6.0
