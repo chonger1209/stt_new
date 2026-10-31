@@ -8,9 +8,8 @@ Windows常驻桌面工具：Caps Lock状态、按软件自动切换大小写、�
 |---|---|---|
 | **STT 2026.10.31 · 标准版** | 最新统计、后台保存、单实例、计时/格子和可靠性改进；完全不含千问界面、线程或依赖，计时器居中 | **不使用本地千问，优先选标准版。** [下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.31) · [手册与源码](standard/) |
 | **STT 2026.10.24 · 千问增强版** | 普通STT功能加千问启停、休眠、状态/速度、独立服务托管和持久停止 | 需要管理兼容本地千问才选它。[下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.24) · [手册](optimized/README.md) · [源码](optimized/) |
-| STT 2026.03.12 · 基础版（历史版） | 早期单文件版本，不含后续完整计时、保存与可靠性改进 | 原版本保留供回退；新安装建议选标准版。[历史发布](https://github.com/chonger1209/stt_new/releases/tag/stt_new) · [说明](docs/LEGACY.md) |
 
-所有历史版本、标签、源码与下载附件保留。根目录stt_new.py、dist/stt_new.exe仍是历史版；当前标准版源码在standard/，千问增强版在optimized/。新版本继续作为试用版发布。
+原基础版已统一归入标准版，不再单独发布。当前只维护标准版 standard/ 和千问增强版 optimized/ 两条路线；旧基础版的发布条目、标签及当前分支中的旧单文件源码/EXE已移除，Git提交历史保留。千问增强版历史修订保留。新版本继续作为试用版发布。
 
 ## 标准版第一次使用
 
@@ -37,6 +36,6 @@ Windows常驻桌面工具：Caps Lock状态、按软件自动切换大小写、�
 - [本次发布说明](docs/releases/2026.10.31.md)
 - [更新日志](CHANGELOG.md)
 - [千问增强版手册](optimized/README.md)
-- [历史版说明](docs/LEGACY.md)
+- [原基础版升级到标准版](docs/LEGACY.md)
 
 标准版57项逻辑测试、源码及EXE真实Tk隔离验收通过；尚未进行多天实机耐久验收。发布包不含个人配置、数据库、日志、密钥或模型文件。

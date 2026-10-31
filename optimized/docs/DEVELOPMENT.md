@@ -36,7 +36,7 @@ python stt_new.py
 | `qwen_service.py` | Strata 接收层适配：网段准入、本机管理与请求/卸载竞争保护 |
 | `smoke_test.py` | 临时数据目录、模拟千问、真实 Tk 控件检查 |
 
-根目录 `stt_new.py` 是旧版入口，`optimized/stt_new.py` 是新版入口，不要混淆。
+标准版入口为 `standard/stt_new.py`，千问增强版入口为 `optimized/stt_new.py`；根目录旧基础版单文件入口已撤下。
 
 ## 保存链路与线程边界
 

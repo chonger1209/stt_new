@@ -4,7 +4,7 @@
 
 STT 是 Windows 桌面悬浮工具，把 **Caps Lock 状态、按软件自动切换大小写、前台应用计时、彩色时间流和番茄倒计时** 放在一个小窗口里。配置兼容环境后，还能管理本地千问模型服务。
 
-本手册对应 `v2026.10.24` 优化版。[基础版](https://github.com/chonger1209/stt_new/releases/tag/stt_new) 仍可下载；旧版的功能与计时实现不以本手册为准。
+本手册对应 `v2026.10.24` 千问增强版。不需要千问管理时，请使用[标准版](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.31)；原基础版已并入标准版，不再单独发布。
 
 ## 千问状态与生成速度
 
@@ -281,4 +281,4 @@ STT/
 
 真实千问生成、真实工作中强退、其他电脑局域网端到端调用、长期实机耐久测试未作为本次通过项，所以仍为试用版。布局尺寸测试不能替代不同屏幕/DPI 下的观感检查。
 
-[仓库首页](https://github.com/chonger1209/stt_new) · [新版下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.24) · [旧版下载](https://github.com/chonger1209/stt_new/releases/tag/stt_new)
+[仓库首页](https://github.com/chonger1209/stt_new) · [新版下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.24) · [标准版下载](https://github.com/chonger1209/stt_new/releases/tag/v2026.10.31)
